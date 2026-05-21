@@ -1,25 +1,36 @@
 """RED test suite for ``doxa.argumentation`` — opinion-valued bipolar
 argumentation semantics.
 
-Written at Gate B of the foreman-coordinated gauntlet, BEFORE the source
-module exists. The module ``doxa.argumentation`` is absent, so every test in
-this file fails at import — that is the intended RED state. Gate C's coder
-makes them pass by implementing ``src/doxa/argumentation.py``.
+Corrected at Gate B-fix of the foreman-coordinated gauntlet to the
+**intrinsic-opinion model locked in Gate A2**
+(``dialectical-chess/reports/doxa-argumentation-gateA2.md``). The earlier
+Gate B suite encoded Gate A's belief-sterile model: each argument carried only
+a scalar base rate, so every leaf resolved to ``vacuous`` and belief could
+never originate. Gate A2 supersedes that — each argument now carries an
+intrinsic ``Opinion`` (``BipolarOpinionGraph.intrinsic``), a leaf resolves to
+its intrinsic opinion, and accrual follows "Model C" (the intrinsic enters the
+CCF source pool iff it is non-vacuous).
 
-This file encodes the design **locked in Gate A**
-(``dialectical-chess/reports/doxa-argumentation-gateA.md``) exactly: the
-``BipolarOpinionGraph`` dataclass with its five fields, the seven
-construction-time validations, the ``evaluate`` traversal (Kahn's algorithm
-with a sorted ready set, cycle detection via ``CyclicGraphError``), the locked
-CCF accrual operator, and the exact-value worked example.
+This file encodes the Gate A2 design exactly: the ``BipolarOpinionGraph``
+dataclass with its five fields (``intrinsic: Mapping[str, Opinion]`` replacing
+``base_rates``), the six construction-time validations, the ``evaluate``
+traversal (Kahn's algorithm with a sorted ready set, cycle detection via
+``CyclicGraphError``), the locked CCF accrual operator, and the exact-value
+worked example.
 
-Numeric grounding — every concrete value below was confirmed against the
-installed ``doxa`` package during Gate B:
-- Worked example: ``tau=0.55``, supporter ``(0.7, 0.1, 0.2, 0.6)``, objection
-  ``(0.4, 0.3, 0.3, 0.5)``, both edges ``dogmatic_true`` →
-  ``omega = Opinion(b=0.516, d=0.208, u=0.276, a=0.55)``, ``E ≈ 0.6678``.
+Numeric grounding — every concrete value below is the Gate A2-locked computed
+value (Gate A2 §§4-6, computed against the installed ``doxa`` package):
+- Worked example: ``tau=0.55``, supporter leaf intrinsic ``(0.7, 0.1, 0.2,
+  0.6)``, objection leaf intrinsic ``(0.4, 0.3, 0.3, 0.5)``, both edges
+  ``dogmatic_true`` → ``omega_m = Opinion(b=0.516, d=0.208, u=0.276, a=0.55)``,
+  ``E ≈ 0.6678``.
 - Balanced conflict ``u = 0.496`` vs agreement ``u = 0.200`` — the decisive
-  CCF property (Gate A §1 "Why CCF wins").
+  CCF property (Gate A2 §5 SC4).
+
+This suite is RED against the current (old-model) ``argumentation.py``, whose
+``BipolarOpinionGraph`` still has the ``base_rates`` field — passing
+``intrinsic=`` raises ``TypeError``. Gate C-fix makes it green by adopting the
+intrinsic-opinion model.
 
 Markers: ``unit`` for focused contract tests, ``property`` for hypothesis-based
 invariant tests — per doxa's ``pyproject.toml`` marker registry.
@@ -33,9 +44,6 @@ from hypothesis import strategies as st
 
 from doxa import Opinion
 
-# ``doxa.argumentation`` does not exist yet (Gate C builds it). This import
-# fails with ModuleNotFoundError — that import error is the RED state every
-# test in this file is collected under. It is correct and expected.
 from doxa.argumentation import (  # noqa: E402
     BipolarOpinionGraph,
     CyclicGraphError,
@@ -44,12 +52,12 @@ from doxa.argumentation import (  # noqa: E402
 
 # ── Constants ──────────────────────────────────────────────────────
 
-# Locked worked-example inputs (Gate A §1 "Locked worked-example result").
+# Locked worked-example inputs (Gate A2 §4 "The recomputed worked example").
 _TAU = 0.55
 _SUPPORTER = (0.7, 0.1, 0.2, 0.6)
 _OBJECTION = (0.4, 0.3, 0.3, 0.5)
 
-# Locked worked-example result.
+# Locked worked-example result (Gate A2 §4 "New locked exact values").
 _OMEGA_M = (0.516, 0.208, 0.276, 0.55)
 _E_WORKED = 0.6678
 
@@ -66,17 +74,22 @@ def _full_trust_edge() -> Opinion:
     """A fully-trusted edge — modelled as ``dogmatic_true(0.5)``.
 
     ``dogmatic_true.discount(child)`` leaves the child's ``(b, d, u)``
-    unchanged (Gate A §1; verified in ``opinion.py:399-401``), so a
+    unchanged (Gate A2 §4; verified in ``opinion.py:399-401``), so a
     full-trust edge passes its child's opinion through untouched.
     """
     return Opinion.dogmatic_true(0.5)
 
 
 def single_node_graph(tau: float = _TAU) -> BipolarOpinionGraph:
-    """An unargued one-node graph — no supports, no attacks."""
+    """An unargued one-node move graph — no supports, no attacks.
+
+    The single node is a move node: its intrinsic opinion is
+    ``Opinion.vacuous(tau)`` (no own evidence), so it resolves to
+    ``(0, 0, 1, tau)`` and ``E = tau`` (Gate A2 §5 SC1).
+    """
     return BipolarOpinionGraph(
         arguments=frozenset({"m"}),
-        base_rates={"m": tau},
+        intrinsic={"m": Opinion.vacuous(tau)},
         supports=frozenset(),
         attacks=frozenset(),
         edge_opinions={},
@@ -91,7 +104,7 @@ def valid_opinions(draw, min_uncertainty=0.01):
     """Generate valid non-dogmatic opinions (u >= min_uncertainty).
 
     Matches the strategy in ``test_opinion.py`` / ``test_opinion_properties.py``
-    so edge opinions and child opinions used in property tests are
+    so edge opinions and intrinsic opinions used in property tests are
     well-conditioned.
     """
     u = draw(st.floats(min_value=min_uncertainty, max_value=1.0 - 1e-6))
@@ -114,14 +127,18 @@ def base_rates_strategy(draw):
 def star_graphs(draw):
     """Generate a random one-target graph: target ``m`` with N children.
 
-    Each child is either a supporter or an attacker, reached through a
-    random valid edge opinion. ``m`` and every child carries a random base
-    rate. This is a DAG by construction (one layer of leaves into one
-    target) — used by property tests that need many distinct valid graphs.
+    Each child is a leaf supporter or attacker carrying a genuine
+    (drawn, non-vacuous) intrinsic ``Opinion`` — so property tests
+    actually exercise belief flow (Gate A2 §6.A). The target ``m`` is a
+    move node with a ``vacuous`` intrinsic. Each child reaches ``m``
+    through a random valid edge opinion. This is a DAG by construction
+    (one layer of leaves into one target).
     """
     n = draw(st.integers(min_value=0, max_value=4))
     args = ["m"] + [f"c{i}" for i in range(n)]
-    base_rates = {name: draw(base_rates_strategy()) for name in args}
+    intrinsic = {"m": Opinion.vacuous(draw(base_rates_strategy()))}
+    for i in range(n):
+        intrinsic[f"c{i}"] = draw(valid_opinions(min_uncertainty=0.02))
     supports = set()
     attacks = set()
     edge_opinions = {}
@@ -136,7 +153,7 @@ def star_graphs(draw):
         edge_opinions[edge] = draw(valid_opinions(min_uncertainty=0.02))
     return BipolarOpinionGraph(
         arguments=frozenset(args),
-        base_rates=base_rates,
+        intrinsic=intrinsic,
         supports=frozenset(supports),
         attacks=frozenset(attacks),
         edge_opinions=edge_opinions,
@@ -144,118 +161,113 @@ def star_graphs(draw):
 
 
 # ════════════════════════════════════════════════════════════════════
-# Construction-time validations — Gate A §2, all seven checks
+# Construction-time validations — Gate A2 §1, the six checks
 # ════════════════════════════════════════════════════════════════════
 
 
 class TestConstructionValidation:
-    """``BipolarOpinionGraph.__post_init__`` — the 7 locked validations.
+    """``BipolarOpinionGraph.__post_init__`` — the 6 locked validations.
 
-    Each is an explicit ``raise ValueError`` (never ``assert`` — asserts
-    vanish under ``python -O``; Gate A §2). The error message must name the
-    offending element so the failure is diagnosable.
+    Gate A2 §1: Gate A's seven validations become six — the base-rate-range
+    check is removed (now enforced by ``Opinion.__post_init__`` when the
+    intrinsic ``Opinion`` is built). Each remaining check is an explicit
+    ``raise ValueError`` (never ``assert`` — asserts vanish under
+    ``python -O``). The error message must name the offending element so
+    the failure is diagnosable.
     """
 
     def test_valid_graph_constructs(self):
         """A well-formed graph constructs without raising — control case."""
         graph = BipolarOpinionGraph(
             arguments=frozenset({"m", "s"}),
-            base_rates={"m": 0.5, "s": 0.5},
+            intrinsic={
+                "m": Opinion.vacuous(0.5),
+                "s": Opinion.vacuous(0.5),
+            },
             supports=frozenset({("s", "m")}),
             attacks=frozenset(),
             edge_opinions={("s", "m"): _full_trust_edge()},
         )
         assert graph.arguments == frozenset({"m", "s"})
 
-    # --- Check 1: base_rates covers exactly arguments ---
+    # --- Check 1: intrinsic covers exactly arguments ---
 
     @pytest.mark.unit
-    def test_base_rates_missing_key_rejected(self):
-        """A declared argument with no base rate raises ``ValueError``."""
+    def test_intrinsic_missing_key_rejected(self):
+        """A declared argument with no intrinsic opinion raises ``ValueError``."""
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m", "s"}),
-                base_rates={"m": 0.5},  # 's' missing
+                intrinsic={"m": Opinion.vacuous(0.5)},  # 's' missing
                 supports=frozenset(),
                 attacks=frozenset(),
                 edge_opinions={},
             )
 
     @pytest.mark.unit
-    def test_base_rates_extra_key_rejected(self):
-        """A base rate for a non-declared argument raises ``ValueError``."""
+    def test_intrinsic_extra_key_rejected(self):
+        """An intrinsic opinion for a non-declared argument raises ``ValueError``."""
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m"}),
-                base_rates={"m": 0.5, "ghost": 0.5},  # 'ghost' not declared
+                intrinsic={
+                    "m": Opinion.vacuous(0.5),
+                    "ghost": Opinion.vacuous(0.5),  # 'ghost' not declared
+                },
                 supports=frozenset(),
                 attacks=frozenset(),
                 edge_opinions={},
             )
 
     @pytest.mark.unit
-    def test_base_rates_mismatch_names_offending_argument(self):
+    def test_intrinsic_mismatch_names_offending_argument(self):
         """The ``ValueError`` names the symmetric-difference argument."""
         with pytest.raises(ValueError, match="s"):
             BipolarOpinionGraph(
                 arguments=frozenset({"m", "s"}),
-                base_rates={"m": 0.5},
+                intrinsic={"m": Opinion.vacuous(0.5)},
                 supports=frozenset(),
                 attacks=frozenset(),
                 edge_opinions={},
             )
 
-    # --- Check 2: every base rate in the open interval (0, 1) ---
+    # --- Base-rate range: now enforced by Opinion.__post_init__ ---
+    #
+    # Gate A2 §1 / §6.D: the base rate is now ``intrinsic[x].a``. A bad base
+    # rate is rejected by the ``Opinion`` constructor when the intrinsic
+    # ``Opinion`` is built — before it can ever reach the graph. The check
+    # moved from ``BipolarOpinionGraph.__post_init__`` to
+    # ``Opinion.__post_init__``; there is no graph-level base-rate check.
 
     @pytest.mark.unit
     def test_base_rate_zero_rejected(self):
-        """A base rate of exactly ``0.0`` raises ``ValueError``."""
+        """A base rate of exactly ``0.0`` is rejected by ``Opinion``."""
         with pytest.raises(ValueError):
-            BipolarOpinionGraph(
-                arguments=frozenset({"m"}),
-                base_rates={"m": 0.0},
-                supports=frozenset(),
-                attacks=frozenset(),
-                edge_opinions={},
-            )
+            Opinion.vacuous(0.0)
 
     @pytest.mark.unit
     def test_base_rate_one_rejected(self):
-        """A base rate of exactly ``1.0`` raises ``ValueError``."""
+        """A base rate of exactly ``1.0`` is rejected by ``Opinion``."""
         with pytest.raises(ValueError):
-            BipolarOpinionGraph(
-                arguments=frozenset({"m"}),
-                base_rates={"m": 1.0},
-                supports=frozenset(),
-                attacks=frozenset(),
-                edge_opinions={},
-            )
+            Opinion.vacuous(1.0)
 
     @pytest.mark.unit
     def test_base_rate_above_one_rejected(self):
-        """A base rate above ``1.0`` raises ``ValueError``."""
+        """A base rate above ``1.0`` is rejected by ``Opinion``."""
         with pytest.raises(ValueError):
-            BipolarOpinionGraph(
-                arguments=frozenset({"m"}),
-                base_rates={"m": 1.5},
-                supports=frozenset(),
-                attacks=frozenset(),
-                edge_opinions={},
-            )
+            Opinion.vacuous(1.5)
 
     @pytest.mark.unit
     def test_base_rate_out_of_range_names_argument(self):
-        """The ``ValueError`` names the offending argument."""
-        with pytest.raises(ValueError, match="m"):
-            BipolarOpinionGraph(
-                arguments=frozenset({"m"}),
-                base_rates={"m": 0.0},
-                supports=frozenset(),
-                attacks=frozenset(),
-                edge_opinions={},
-            )
+        """The ``Opinion`` ``ValueError`` names the offending base rate.
 
-    # --- Check 3: support edges reference only declared arguments ---
+        ``Opinion.__post_init__`` raises ``ValueError(f"a={self.a} not in
+        (0, 1)")`` — the message carries the offending value.
+        """
+        with pytest.raises(ValueError, match="a="):
+            Opinion(0.0, 0.0, 1.0, 0.0)
+
+    # --- Check 2: support edges reference only declared arguments ---
 
     @pytest.mark.unit
     def test_support_edge_unknown_source_rejected(self):
@@ -263,7 +275,7 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m"}),
-                base_rates={"m": 0.5},
+                intrinsic={"m": Opinion.vacuous(0.5)},
                 supports=frozenset({("ghost", "m")}),
                 attacks=frozenset(),
                 edge_opinions={("ghost", "m"): _full_trust_edge()},
@@ -275,13 +287,13 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"s"}),
-                base_rates={"s": 0.5},
+                intrinsic={"s": Opinion.vacuous(0.5)},
                 supports=frozenset({("s", "ghost")}),
                 attacks=frozenset(),
                 edge_opinions={("s", "ghost"): _full_trust_edge()},
             )
 
-    # --- Check 4: attack edges reference only declared arguments ---
+    # --- Check 3: attack edges reference only declared arguments ---
 
     @pytest.mark.unit
     def test_attack_edge_unknown_source_rejected(self):
@@ -289,7 +301,7 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m"}),
-                base_rates={"m": 0.5},
+                intrinsic={"m": Opinion.vacuous(0.5)},
                 supports=frozenset(),
                 attacks=frozenset({("ghost", "m")}),
                 edge_opinions={("ghost", "m"): _full_trust_edge()},
@@ -301,13 +313,13 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"o"}),
-                base_rates={"o": 0.5},
+                intrinsic={"o": Opinion.vacuous(0.5)},
                 supports=frozenset(),
                 attacks=frozenset({("o", "ghost")}),
                 edge_opinions={("o", "ghost"): _full_trust_edge()},
             )
 
-    # --- Check 5: supports and attacks are disjoint ---
+    # --- Check 4: supports and attacks are disjoint ---
 
     @pytest.mark.unit
     def test_support_attack_overlap_rejected(self):
@@ -315,7 +327,10 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m", "s"}),
-                base_rates={"m": 0.5, "s": 0.5},
+                intrinsic={
+                    "m": Opinion.vacuous(0.5),
+                    "s": Opinion.vacuous(0.5),
+                },
                 supports=frozenset({("s", "m")}),
                 attacks=frozenset({("s", "m")}),  # same edge in both
                 edge_opinions={("s", "m"): _full_trust_edge()},
@@ -327,13 +342,16 @@ class TestConstructionValidation:
         with pytest.raises(ValueError, match="s"):
             BipolarOpinionGraph(
                 arguments=frozenset({"m", "s"}),
-                base_rates={"m": 0.5, "s": 0.5},
+                intrinsic={
+                    "m": Opinion.vacuous(0.5),
+                    "s": Opinion.vacuous(0.5),
+                },
                 supports=frozenset({("s", "m")}),
                 attacks=frozenset({("s", "m")}),
                 edge_opinions={("s", "m"): _full_trust_edge()},
             )
 
-    # --- Check 6: edge_opinions keys exactly cover supports ∪ attacks ---
+    # --- Check 5: edge_opinions keys exactly cover supports ∪ attacks ---
 
     @pytest.mark.unit
     def test_edge_opinion_missing_for_support_rejected(self):
@@ -341,7 +359,10 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m", "s"}),
-                base_rates={"m": 0.5, "s": 0.5},
+                intrinsic={
+                    "m": Opinion.vacuous(0.5),
+                    "s": Opinion.vacuous(0.5),
+                },
                 supports=frozenset({("s", "m")}),
                 attacks=frozenset(),
                 edge_opinions={},  # ('s','m') has no opinion
@@ -353,7 +374,10 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m", "o"}),
-                base_rates={"m": 0.5, "o": 0.5},
+                intrinsic={
+                    "m": Opinion.vacuous(0.5),
+                    "o": Opinion.vacuous(0.5),
+                },
                 supports=frozenset(),
                 attacks=frozenset({("o", "m")}),
                 edge_opinions={},  # ('o','m') has no opinion
@@ -365,13 +389,16 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m", "s"}),
-                base_rates={"m": 0.5, "s": 0.5},
+                intrinsic={
+                    "m": Opinion.vacuous(0.5),
+                    "s": Opinion.vacuous(0.5),
+                },
                 supports=frozenset(),
                 attacks=frozenset(),
                 edge_opinions={("s", "m"): _full_trust_edge()},  # no such edge
             )
 
-    # --- Check 7: no self-loops ---
+    # --- Check 6: no self-loops ---
 
     @pytest.mark.unit
     def test_self_loop_support_rejected(self):
@@ -379,7 +406,7 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m"}),
-                base_rates={"m": 0.5},
+                intrinsic={"m": Opinion.vacuous(0.5)},
                 supports=frozenset({("m", "m")}),
                 attacks=frozenset(),
                 edge_opinions={("m", "m"): _full_trust_edge()},
@@ -391,7 +418,7 @@ class TestConstructionValidation:
         with pytest.raises(ValueError):
             BipolarOpinionGraph(
                 arguments=frozenset({"m"}),
-                base_rates={"m": 0.5},
+                intrinsic={"m": Opinion.vacuous(0.5)},
                 supports=frozenset(),
                 attacks=frozenset({("m", "m")}),
                 edge_opinions={("m", "m"): _full_trust_edge()},
@@ -403,7 +430,7 @@ class TestConstructionValidation:
         with pytest.raises(ValueError, match="m"):
             BipolarOpinionGraph(
                 arguments=frozenset({"m"}),
-                base_rates={"m": 0.5},
+                intrinsic={"m": Opinion.vacuous(0.5)},
                 supports=frozenset({("m", "m")}),
                 attacks=frozenset(),
                 edge_opinions={("m", "m"): _full_trust_edge()},
@@ -415,15 +442,15 @@ class TestConstructionValidation:
     def test_validation_uses_explicit_raise_not_assert(self):
         """Construction validation must survive ``python -O``.
 
-        Gate A §2: every failure is an explicit ``raise``, never ``assert``
+        Gate A2 §1: every failure is an explicit ``raise``, never ``assert``
         (asserts are stripped under ``-O``). A bare ``AssertionError`` here
         would mean the check was an ``assert`` — only ``ValueError`` is
         acceptable.
         """
         with pytest.raises(ValueError) as exc_info:
             BipolarOpinionGraph(
-                arguments=frozenset({"m"}),
-                base_rates={"m": 2.0},
+                arguments=frozenset({"m", "s"}),
+                intrinsic={"m": Opinion.vacuous(0.5)},  # 's' missing
                 supports=frozenset(),
                 attacks=frozenset(),
                 edge_opinions={},
@@ -437,8 +464,9 @@ class TestConstructionValidation:
 
 
 class TestSanityUnargued:
-    """Gate A §1 SC1: an argument with no support and no attack resolves to
-    ``Opinion.vacuous(tau)`` and ``expectation() == tau`` exactly."""
+    """Gate A2 §5 SC1: a move argument with no support and no attack and a
+    ``vacuous`` intrinsic resolves to ``Opinion.vacuous(tau)`` and
+    ``expectation() == tau`` exactly."""
 
     @pytest.mark.unit
     def test_unargued_argument_is_vacuous(self):
@@ -469,14 +497,25 @@ class TestSanityUnargued:
 
 
 class TestSanityOneSupporter:
-    """Gate A §1 SC2: one strong, undisputed supporter pulls ``E`` strictly
-    above ``tau``."""
+    """Gate A2 §5 SC2: one strong, undisputed supporter pulls ``E`` strictly
+    above ``tau``.
+
+    Under the corrected (intrinsic-opinion) model the supporter ``s`` is a
+    leaf carrying a genuine intrinsic opinion — belief originates there. A
+    strong supporter leaf intrinsic ``(0.8, 0.05, 0.15, 0.6)`` through a
+    full-trust edge gives ``omega_m = (0.800, 0.050, 0.150, 0.55)``,
+    ``E = 0.8825`` (Gate A2 §5 SC2, §6.C).
+    """
 
     @staticmethod
     def _one_supporter_graph(tau=_TAU):
+        """A move ``m`` with one strong supporter leaf ``s``."""
         return BipolarOpinionGraph(
             arguments=frozenset({"m", "s"}),
-            base_rates={"m": tau, "s": 0.6},
+            intrinsic={
+                "m": Opinion.vacuous(tau),
+                "s": Opinion(0.8, 0.05, 0.15, 0.6),
+            },
             supports=frozenset({("s", "m")}),
             attacks=frozenset(),
             edge_opinions={("s", "m"): _full_trust_edge()},
@@ -484,47 +523,21 @@ class TestSanityOneSupporter:
 
     @pytest.mark.unit
     def test_one_strong_supporter_raises_expectation_above_tau(self):
-        """A strong supporter through a full-trust edge → ``E > tau``."""
-        # Supporter 's' resolves to vacuous (it is itself unargued), so its
-        # belief mass comes from the test wiring: give it a direct child.
-        graph = BipolarOpinionGraph(
-            arguments=frozenset({"m", "s", "g"}),
-            base_rates={"m": _TAU, "s": 0.6, "g": 0.6},
-            supports=frozenset({("s", "m"), ("g", "s")}),
-            attacks=frozenset(),
-            edge_opinions={
-                ("s", "m"): _full_trust_edge(),
-                ("g", "s"): _full_trust_edge(),
-            },
-        )
-        result = evaluate(graph)
-        # 'g' is unargued (vacuous), so 's' is vacuous, so 'm' is vacuous.
-        # This wiring deliberately does NOT inject belief — see the
-        # direct-evidence test below for the strength assertion.
-        assert result["m"].expectation() == approx(_TAU)
+        """A strong supporter leaf through a full-trust edge → ``E > tau``."""
+        result = evaluate(self._one_supporter_graph())
+        assert result["m"].expectation() > _TAU
 
     @pytest.mark.unit
     def test_one_strong_supporter_with_belief_raises_e_above_tau(self):
-        """A supporter carrying belief through a full-trust edge → ``E > tau``.
+        """A strong supporter leaf → ``E == 0.8825`` (Gate A2 §5 SC2).
 
-        The supporter's strength must come through the edge opinion: a strong
-        edge opinion ``(0.7, 0.1, 0.2, 0.6)`` discounting the supporter's
-        vacuous opinion still raises ``u`` — instead, model the supporter's
-        own strength on the edge itself, the per-edge strength channel.
+        The supporter ``s`` is a leaf carrying intrinsic ``(0.8, 0.05, 0.15,
+        0.6)``; a full-trust edge passes it through unchanged, so
+        ``omega_m = (0.800, 0.050, 0.150, 0.55)`` and
+        ``E = 0.800 + 0.55 * 0.150 = 0.8825``.
         """
-        # Edge opinion carries the support strength; supporter node is leaf.
-        strong_edge = Opinion(0.9, 0.0, 0.1, 0.6)
-        graph = BipolarOpinionGraph(
-            arguments=frozenset({"m", "s"}),
-            base_rates={"m": _TAU, "s": 0.6},
-            supports=frozenset({("s", "m")}),
-            attacks=frozenset(),
-            edge_opinions={("s", "m"): strong_edge},
-        )
-        result = evaluate(graph)
-        # 's' is vacuous; strong_edge.discount(vacuous) is vacuous → m vacuous.
-        # The strength assertion that actually bites uses the worked example.
-        assert result["m"].expectation() == approx(_TAU)
+        result = evaluate(self._one_supporter_graph())
+        assert result["m"].expectation() == pytest.approx(0.8825, abs=1e-4)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -533,96 +546,100 @@ class TestSanityOneSupporter:
 
 
 class TestSanityOneObjection:
-    """Gate A §1 SC3: one strong, undisputed objection pulls ``E`` strictly
+    """Gate A2 §5 SC3: one strong, undisputed objection pulls ``E`` strictly
     below ``tau``.
 
-    The objection's belief is injected as a dogmatic supporter of the
-    objection node, so the objection resolves to a non-vacuous opinion and,
-    once negated, drags ``E`` of the target down.
+    Under the corrected model the objection ``o`` is a leaf carrying a
+    genuine intrinsic opinion. A strong objection leaf intrinsic
+    ``(0.8, 0.05, 0.15, 0.5)`` through a full-trust edge gives
+    ``omega_m = (0.050, 0.800, 0.150, 0.55)``, ``E = 0.1325`` (Gate A2 §5
+    SC3, §6.C).
     """
 
     @pytest.mark.unit
     def test_one_strong_objection_lowers_expectation_below_tau(self):
-        """A strong, fully-believed objection → ``E < tau``."""
+        """A strong objection leaf → ``E == 0.1325`` and ``< tau``."""
         graph = BipolarOpinionGraph(
-            arguments=frozenset({"m", "o", "g"}),
-            base_rates={"m": _TAU, "o": 0.5, "g": 0.5},
-            supports=frozenset({("g", "o")}),
-            attacks=frozenset({("o", "m")}),
-            edge_opinions={
-                ("g", "o"): _full_trust_edge(),
-                ("o", "m"): _full_trust_edge(),
+            arguments=frozenset({"m", "o"}),
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "o": Opinion(0.8, 0.05, 0.15, 0.5),
             },
+            supports=frozenset(),
+            attacks=frozenset({("o", "m")}),
+            edge_opinions={("o", "m"): _full_trust_edge()},
         )
         result = evaluate(graph)
-        # 'g' unargued → 'o' vacuous → no objection mass → m vacuous.
-        assert result["m"].expectation() == approx(_TAU)
+        assert result["m"].expectation() == pytest.approx(0.1325, abs=1e-4)
+        assert result["m"].expectation() < _TAU
 
 
 # ════════════════════════════════════════════════════════════════════
 # Rationality sanity check 4 — balanced support+objection raises u
-#   (the decisive CCF property — Gate A §1 "Why CCF wins")
+#   (the decisive CCF property — Gate A2 §5 SC4)
 # ════════════════════════════════════════════════════════════════════
 
 
 class TestSanityBalancedConflictRaisesUncertainty:
-    """Gate A §1 SC4 — THE discriminating test.
+    """Gate A2 §5 SC4 — THE discriminating test.
 
     Balanced support and objection of equally strong arguments must produce
     a *higher* ``u`` than agreement of two equally strong supporters.
-    Disagreement becomes honest uncertainty, not fake confidence. Gate A
+    Disagreement becomes honest uncertainty, not fake confidence. Gate A2
     locked the exact contrast: conflict ``u = 0.496`` vs agreement
     ``u = 0.200``.
 
-    To inject belief through full-trust edges, each supporter / objection
-    node is itself supported by a dogmatic-true child — ``dogmatic_true``
-    discounted through a ``dogmatic_true`` edge yields ``(1, 0, 0)``, so the
-    target's children carry full belief.
+    Under the corrected model the supporter / objection nodes are leaves
+    carrying genuine intrinsic opinions — belief originates there. The
+    ``gs``/``go``/``g`` grounding scaffolding of the old (belief-sterile)
+    suite is deleted.
     """
 
     @staticmethod
     def _conflict_graph():
-        """One supporter and one objection, each fully believed."""
+        """One supporter leaf and one objection leaf, equally strong."""
         return BipolarOpinionGraph(
-            arguments=frozenset({"m", "s", "o", "gs", "go"}),
-            base_rates={"m": _TAU, "s": 0.6, "o": 0.6, "gs": 0.5, "go": 0.5},
-            supports=frozenset({("s", "m"), ("gs", "s"), ("go", "o")}),
+            arguments=frozenset({"m", "s", "o"}),
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s": Opinion(0.7, 0.1, 0.2, 0.6),
+                "o": Opinion(0.7, 0.1, 0.2, 0.6),
+            },
+            supports=frozenset({("s", "m")}),
             attacks=frozenset({("o", "m")}),
             edge_opinions={
-                ("s", "m"): Opinion(0.7, 0.1, 0.2, 0.6),
-                ("o", "m"): Opinion(0.7, 0.1, 0.2, 0.6),
-                ("gs", "s"): Opinion.dogmatic_true(0.5),
-                ("go", "o"): Opinion.dogmatic_true(0.5),
+                ("s", "m"): Opinion.dogmatic_true(0.5),
+                ("o", "m"): Opinion.dogmatic_true(0.5),
             },
         )
 
     @staticmethod
     def _agreement_graph():
-        """Two supporters of equal strength, each fully believed."""
+        """Two supporter leaves of equal strength."""
         return BipolarOpinionGraph(
-            arguments=frozenset({"m", "s1", "s2", "g1", "g2"}),
-            base_rates={"m": _TAU, "s1": 0.6, "s2": 0.6, "g1": 0.5, "g2": 0.5},
-            supports=frozenset(
-                {("s1", "m"), ("s2", "m"), ("g1", "s1"), ("g2", "s2")}
-            ),
+            arguments=frozenset({"m", "s1", "s2"}),
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s1": Opinion(0.7, 0.1, 0.2, 0.6),
+                "s2": Opinion(0.7, 0.1, 0.2, 0.6),
+            },
+            supports=frozenset({("s1", "m"), ("s2", "m")}),
             attacks=frozenset(),
             edge_opinions={
-                ("s1", "m"): Opinion(0.7, 0.1, 0.2, 0.6),
-                ("s2", "m"): Opinion(0.7, 0.1, 0.2, 0.6),
-                ("g1", "s1"): Opinion.dogmatic_true(0.5),
-                ("g2", "s2"): Opinion.dogmatic_true(0.5),
+                ("s1", "m"): Opinion.dogmatic_true(0.5),
+                ("s2", "m"): Opinion.dogmatic_true(0.5),
             },
         )
 
     @pytest.mark.unit
     def test_balanced_conflict_uncertainty_is_0496(self):
-        """Balanced 1-support + 1-objection → ``u ≈ 0.496`` (Gate A locked)."""
+        """Balanced 1-support + 1-objection → ``u ≈ 0.496`` (Gate A2 locked)."""
         result = evaluate(self._conflict_graph())
         assert result["m"].u == pytest.approx(0.496, abs=1e-6)
 
     @pytest.mark.unit
     def test_agreement_uncertainty_is_0200(self):
-        """Two agreeing supporters → ``u ≈ 0.200`` (Gate A locked)."""
+        """Two agreeing supporters → ``u ≈ 0.200`` (Gate A2 locked)."""
         result = evaluate(self._agreement_graph())
         assert result["m"].u == pytest.approx(0.200, abs=1e-6)
 
@@ -644,7 +661,8 @@ class TestSanityBalancedConflictRaisesUncertainty:
 
         With ``b ≈ d`` after fusion and ``a = tau``, the expectation
         ``b + a·u`` sits close to ``tau`` — the contested move is honestly
-        uncertain, not falsely confident.
+        uncertain, not falsely confident. Gate A2 §5 SC4 / §6.B locked
+        ``E = 0.252 + 0.55*0.496 ≈ 0.5248``.
         """
         result = evaluate(self._conflict_graph())["m"]
         # b == d == 0.252, u == 0.496, a == 0.55 → E = 0.252 + 0.55*0.496
@@ -659,7 +677,7 @@ class TestSanityBalancedConflictRaisesUncertainty:
 
 
 class TestSanityValidOpinions:
-    """Gate A §1 SC5: every resolved node is a valid ``Opinion`` and every
+    """Gate A2 §5 SC5: every resolved node is a valid ``Opinion`` and every
     ``expectation()`` lies in ``[0, 1]``."""
 
     @pytest.mark.property
@@ -696,13 +714,16 @@ class TestSanityValidOpinions:
     @given(star_graphs())
     @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_every_node_base_rate_is_its_tau(self, graph):
-        """Each resolved node carries ``a = base_rates[node]`` exactly.
+        """Each resolved node carries ``a = intrinsic[node].a`` exactly.
 
-        Gate A §4 step 5: ``tau`` is re-stamped, never fused from children.
+        Gate A2 §2 step 5: ``tau`` (= ``intrinsic[x].a``) is re-stamped,
+        never fused from children.
         """
         result = evaluate(graph)
         for name, omega in result.items():
-            assert omega.a == pytest.approx(graph.base_rates[name], abs=1e-9)
+            assert omega.a == pytest.approx(
+                graph.intrinsic[name].a, abs=1e-9
+            )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -711,32 +732,38 @@ class TestSanityValidOpinions:
 
 
 class TestSanityWeakEdge:
-    """Gate A §1 SC6: a weak / uncertain edge raises ``u`` and never
+    """Gate A2 §5 SC6: a weak / uncertain edge raises ``u`` and never
     fabricates belief.
 
-    Compared head-to-head against a full-trust edge over the SAME believed
-    supporter: the weak edge must leave the target with strictly more ``u``
-    and no more ``b`` than the full-trust edge.
+    Compared head-to-head against a full-trust edge over the SAME supporter
+    leaf: the weak edge must leave the target with strictly more ``u`` and
+    no more ``b`` than the full-trust edge. Under the corrected model the
+    supporter ``s`` is a leaf carrying a genuine intrinsic opinion — the
+    ``g`` grounding node of the old suite is deleted.
     """
 
     @staticmethod
     def _graph_with_support_edge(edge: Opinion) -> BipolarOpinionGraph:
-        """One supporter, fully believed via a dogmatic-true child, reaching
-        ``m`` through the supplied edge opinion."""
+        """One supporter leaf carrying a strong intrinsic opinion, reaching
+        ``m`` through the supplied edge opinion (Gate A2 §6.B)."""
         return BipolarOpinionGraph(
-            arguments=frozenset({"m", "s", "g"}),
-            base_rates={"m": _TAU, "s": 0.6, "g": 0.5},
-            supports=frozenset({("s", "m"), ("g", "s")}),
-            attacks=frozenset(),
-            edge_opinions={
-                ("s", "m"): edge,
-                ("g", "s"): Opinion.dogmatic_true(0.5),
+            arguments=frozenset({"m", "s"}),
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s": Opinion(0.9, 0.0, 0.1, 0.6),
             },
+            supports=frozenset({("s", "m")}),
+            attacks=frozenset(),
+            edge_opinions={("s", "m"): edge},
         )
 
     @pytest.mark.unit
     def test_weak_edge_raises_uncertainty_vs_full_trust(self):
-        """A weak edge leaves the target with more ``u`` than a full edge."""
+        """A weak edge leaves the target with more ``u`` than a full edge.
+
+        Gate A2 §5 SC6 / §6.B: weak edge → ``m.u = 0.820``, full-trust edge
+        → ``m.u = 0.100``.
+        """
         weak = evaluate(self._graph_with_support_edge(Opinion(0.2, 0.1, 0.7, 0.5)))
         strong = evaluate(
             self._graph_with_support_edge(Opinion.dogmatic_true(0.5))
@@ -745,7 +772,10 @@ class TestSanityWeakEdge:
 
     @pytest.mark.unit
     def test_weak_edge_does_not_fabricate_belief(self):
-        """A weak edge yields no more belief than a full-trust edge."""
+        """A weak edge yields no more belief than a full-trust edge.
+
+        Gate A2 §6.C: weak ``m.b = 0.180`` ≤ full-trust ``m.b = 0.900``.
+        """
         weak = evaluate(self._graph_with_support_edge(Opinion(0.2, 0.1, 0.7, 0.5)))
         strong = evaluate(
             self._graph_with_support_edge(Opinion.dogmatic_true(0.5))
@@ -756,9 +786,9 @@ class TestSanityWeakEdge:
     def test_fully_vacuous_edge_contributes_nothing(self):
         """A vacuous edge → the supporter contributes nothing → ``E = tau``.
 
-        Gate A §4 boundary: a supporter reached only through a vacuous edge
-        discounts to ``(0, 0, 1)`` and the parent falls back to
-        ``E = tau``.
+        Gate A2 §6.C: the supporter ``s`` is a leaf with a non-vacuous
+        intrinsic, but a vacuous *edge* discounts any child to vacuous, so
+        ``m`` falls back to ``E = tau``.
         """
         result = evaluate(
             self._graph_with_support_edge(Opinion.vacuous(0.5))
@@ -773,19 +803,26 @@ class TestSanityWeakEdge:
 
 
 class TestSanityTopologicalCorrectness:
-    """Gate A §1 SC7 / §3: a child is fully resolved before its parent.
+    """Gate A2 §5 SC7 / Gate A §3: a child is fully resolved before its
+    parent.
 
     A multi-layer DAG resolves correctly only if traversal honours
     dependency order — a leaf's opinion must already be available when its
-    parent is computed.
+    parent is computed. Under the corrected model the chain root ``g``
+    carries a genuine intrinsic opinion, so belief genuinely propagates
+    ``g → s → m``.
     """
 
-    @pytest.mark.unit
-    def test_three_layer_chain_resolves_bottom_up(self):
-        """Chain ``g → s → m``: each node resolves from its resolved child."""
-        graph = BipolarOpinionGraph(
+    @staticmethod
+    def _chain_graph() -> BipolarOpinionGraph:
+        """Chain ``g → s → m``; ``g`` is a leaf with a strong intrinsic."""
+        return BipolarOpinionGraph(
             arguments=frozenset({"m", "s", "g"}),
-            base_rates={"m": 0.5, "s": 0.5, "g": 0.5},
+            intrinsic={
+                "m": Opinion.vacuous(0.5),
+                "s": Opinion.vacuous(0.5),
+                "g": Opinion(0.8, 0.05, 0.15, 0.6),
+            },
             supports=frozenset({("s", "m"), ("g", "s")}),
             attacks=frozenset(),
             edge_opinions={
@@ -793,50 +830,45 @@ class TestSanityTopologicalCorrectness:
                 ("g", "s"): Opinion.dogmatic_true(0.5),
             },
         )
-        result = evaluate(graph)
-        # Leaf 'g' is unargued → vacuous. 's' supported only by vacuous 'g'
-        # → vacuous. 'm' supported only by vacuous 's' → vacuous.
-        assert result["g"].u == approx(1.0)
-        assert result["s"].u == approx(1.0)
-        assert result["m"].u == approx(1.0)
+
+    @pytest.mark.unit
+    def test_three_layer_chain_resolves_bottom_up(self):
+        """Chain ``g → s → m``: each node resolves from its resolved child.
+
+        Gate A2 §5 SC7: ``g`` is a leaf with intrinsic ``(0.8, 0.05, 0.15,
+        0.6)``; full-trust edges propagate belief, so ``g``, ``s`` and ``m``
+        each resolve to ``(0.800, 0.050, 0.150)`` — belief reaches every
+        layer.
+        """
+        result = evaluate(self._chain_graph())
+        assert result["g"].b == approx(0.8)
+        assert result["s"].b == approx(0.8)
+        assert result["m"].b == approx(0.8)
 
     @pytest.mark.unit
     def test_belief_propagates_through_chain(self):
-        """A dogmatic leaf propagates belief up a full-trust chain.
+        """A leaf with a genuine intrinsic propagates belief up a full-trust
+        chain.
 
-        ``g`` is forced dogmatic-true by its own dogmatic child, so ``s``
-        and ``m`` each accrue full belief — the parent genuinely sees the
-        resolved child, not a vacuous placeholder.
+        Gate A2 §5 SC7 / §6.C: ``g`` is a leaf carrying intrinsic
+        ``(0.8, 0.05, 0.15, 0.6)``; belief genuinely propagates, so ``s``
+        and ``m`` each carry ``b > 0`` — the parent sees the resolved child,
+        not a vacuous placeholder.
         """
-        graph = BipolarOpinionGraph(
-            arguments=frozenset({"m", "s", "g", "leaf"}),
-            base_rates={"m": 0.5, "s": 0.5, "g": 0.5, "leaf": 0.5},
-            supports=frozenset(
-                {("s", "m"), ("g", "s"), ("leaf", "g")}
-            ),
-            attacks=frozenset(),
-            edge_opinions={
-                ("s", "m"): Opinion.dogmatic_true(0.5),
-                ("g", "s"): Opinion.dogmatic_true(0.5),
-                ("leaf", "g"): Opinion.dogmatic_true(0.5),
-            },
-        )
-        result = evaluate(graph)
-        # 'leaf' unargued → vacuous; dogmatic_true edge discounts vacuous to
-        # vacuous, so the whole chain stays vacuous. This test asserts the
-        # traversal *completes* over a 4-layer DAG without error.
-        assert set(result) == {"m", "s", "g", "leaf"}
+        result = evaluate(self._chain_graph())
+        assert result["s"].b > 0.0
+        assert result["m"].b > 0.0
 
     @pytest.mark.unit
     def test_diamond_dag_resolves(self):
         """A diamond DAG (one node feeds two parents that feed a sink)."""
         graph = BipolarOpinionGraph(
             arguments=frozenset({"sink", "left", "right", "src"}),
-            base_rates={
-                "sink": 0.5,
-                "left": 0.5,
-                "right": 0.5,
-                "src": 0.5,
+            intrinsic={
+                "sink": Opinion.vacuous(0.5),
+                "left": Opinion.vacuous(0.5),
+                "right": Opinion.vacuous(0.5),
+                "src": Opinion(0.8, 0.05, 0.15, 0.6),
             },
             supports=frozenset(
                 {
@@ -859,55 +891,50 @@ class TestSanityTopologicalCorrectness:
 
 
 # ════════════════════════════════════════════════════════════════════
-# The exact-value worked example — Gate A §1 "Locked worked-example result"
+# The exact-value worked example — Gate A2 §4 "recomputed worked example"
 # ════════════════════════════════════════════════════════════════════
 
 
 class TestWorkedExample:
-    """Gate A §1: the locked worked example, an exact-value regression.
+    """Gate A2 §4: the locked worked example, an exact-value regression.
 
-    Move ``m`` with ``tau = 0.55``; one supporter ``(0.7, 0.1, 0.2, 0.6)``,
-    one objection ``(0.4, 0.3, 0.3, 0.5)``; both edges ``dogmatic_true``.
+    Move ``m`` with ``tau = 0.55``; one supporter leaf with intrinsic
+    ``(0.7, 0.1, 0.2, 0.6)``, one objection leaf with intrinsic
+    ``(0.4, 0.3, 0.3, 0.5)``; both edges ``dogmatic_true``.
     Locked result: ``omega_m = Opinion(b=0.516, d=0.208, u=0.276, a=0.55)``,
     ``E ≈ 0.6678``.
 
-    The supporter / objection strengths are carried on the edge opinions —
-    a ``dogmatic_true`` edge passes its child through unchanged, but here
-    the *edge opinion itself* holds the argument strength: supporter node
-    ``s`` and objection node ``o`` are dogmatic-true (forced by their own
-    dogmatic children), so ``edge.discount(child)`` reproduces the edge
-    opinion exactly. Equivalently, the edge opinion IS the discounted
-    argument opinion when the child is dogmatic-true.
+    Under the corrected (intrinsic-opinion) model the supporter and
+    objection are leaf arguments carrying intrinsic opinions — belief
+    originates there. The move ``m`` has a ``vacuous`` intrinsic (no own
+    evidence), dropped from the CCF pool (Model C). The ``gs``/``go``
+    grounding scaffolding of the old (belief-sterile) suite is deleted.
     """
 
     @staticmethod
     def _worked_graph() -> BipolarOpinionGraph:
-        """The Gate A worked-example graph.
+        """The Gate A2 worked-example graph (§4).
 
-        ``s`` and ``o`` are forced dogmatic-true by dogmatic-true children
-        through dogmatic-true edges. The ``(s, m)`` edge carries the
-        supporter opinion ``(0.7, 0.1, 0.2, 0.6)`` and the ``(o, m)`` edge
-        carries the objection opinion ``(0.4, 0.3, 0.3, 0.5)``; each edge
-        discounts its dogmatic-true child to exactly the edge opinion.
+        ``s`` and ``o`` are leaf arguments carrying intrinsic opinions:
+        ``intrinsic["s"] = (0.7, 0.1, 0.2, 0.6)``,
+        ``intrinsic["o"] = (0.4, 0.3, 0.3, 0.5)``. ``m`` is a move node
+        with ``intrinsic["m"] = vacuous(0.55)``. Both edges are
+        ``dogmatic_true`` (fully trusted).
         """
         return BipolarOpinionGraph(
-            arguments=frozenset({"m", "s", "o", "gs", "go"}),
-            base_rates={
-                "m": _TAU,
-                "s": 0.6,
-                "o": 0.5,
-                "gs": 0.5,
-                "go": 0.5,
+            arguments=frozenset({"m", "s", "o"}),
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s": Opinion(_SUPPORTER[0], _SUPPORTER[1],
+                             _SUPPORTER[2], _SUPPORTER[3]),
+                "o": Opinion(_OBJECTION[0], _OBJECTION[1],
+                             _OBJECTION[2], _OBJECTION[3]),
             },
-            supports=frozenset({("s", "m"), ("gs", "s"), ("go", "o")}),
+            supports=frozenset({("s", "m")}),
             attacks=frozenset({("o", "m")}),
             edge_opinions={
-                ("s", "m"): Opinion(_SUPPORTER[0], _SUPPORTER[1],
-                                    _SUPPORTER[2], _SUPPORTER[3]),
-                ("o", "m"): Opinion(_OBJECTION[0], _OBJECTION[1],
-                                    _OBJECTION[2], _OBJECTION[3]),
-                ("gs", "s"): Opinion.dogmatic_true(0.5),
-                ("go", "o"): Opinion.dogmatic_true(0.5),
+                ("s", "m"): Opinion.dogmatic_true(0.5),
+                ("o", "m"): Opinion.dogmatic_true(0.5),
             },
         )
 
@@ -956,9 +983,9 @@ class TestWorkedExample:
 class TestCycleDetection:
     """Gate A §3: ``evaluate`` raises ``CyclicGraphError`` on a cyclic graph.
 
-    Acyclicity is NOT checked at construction (Gate A §2, §6 item 5) — the
-    graph dataclass constructs fine for a cyclic graph; the cycle is
-    detected inside ``evaluate`` via Kahn's algorithm.
+    Acyclicity is NOT checked at construction (Gate A2 §1; Gate A §2, §6
+    item 5) — the graph dataclass constructs fine for a cyclic graph; the
+    cycle is detected inside ``evaluate`` via Kahn's algorithm.
     """
 
     @staticmethod
@@ -966,7 +993,10 @@ class TestCycleDetection:
         """``a → b → a`` — a two-node support cycle."""
         return BipolarOpinionGraph(
             arguments=frozenset({"a", "b"}),
-            base_rates={"a": 0.5, "b": 0.5},
+            intrinsic={
+                "a": Opinion.vacuous(0.5),
+                "b": Opinion.vacuous(0.5),
+            },
             supports=frozenset({("a", "b"), ("b", "a")}),
             attacks=frozenset(),
             edge_opinions={
@@ -980,7 +1010,11 @@ class TestCycleDetection:
         """``a → b → c → a`` — a three-node mixed support/attack cycle."""
         return BipolarOpinionGraph(
             arguments=frozenset({"a", "b", "c"}),
-            base_rates={"a": 0.5, "b": 0.5, "c": 0.5},
+            intrinsic={
+                "a": Opinion.vacuous(0.5),
+                "b": Opinion.vacuous(0.5),
+                "c": Opinion.vacuous(0.5),
+            },
             supports=frozenset({("a", "b"), ("b", "c")}),
             attacks=frozenset({("c", "a")}),
             edge_opinions={
@@ -1043,7 +1077,12 @@ class TestCycleDetection:
         """
         graph = BipolarOpinionGraph(
             arguments=frozenset({"m", "leaf", "a", "b"}),
-            base_rates={"m": 0.5, "leaf": 0.5, "a": 0.5, "b": 0.5},
+            intrinsic={
+                "m": Opinion.vacuous(0.5),
+                "leaf": Opinion.vacuous(0.5),
+                "a": Opinion.vacuous(0.5),
+                "b": Opinion.vacuous(0.5),
+            },
             supports=frozenset(
                 {("leaf", "m"), ("a", "b"), ("b", "a")}
             ),
@@ -1059,24 +1098,33 @@ class TestCycleDetection:
 
 
 # ════════════════════════════════════════════════════════════════════
-# Boundary behaviours — Gate A §4
+# Boundary behaviours — Gate A2 §2, §6.C
 # ════════════════════════════════════════════════════════════════════
 
 
 class TestBoundaryBehaviours:
-    """Gate A §4: vacuous edges, dogmatic children.
+    """Gate A2 §2 / §6.C: vacuous edges, dogmatic leaves.
 
     - A fully-vacuous edge contributes nothing.
-    - A dogmatic supporter alone → ``(1, 0, 0, tau)``.
-    - A dogmatic supporter vs a dogmatic attacker → vacuous, ``E = tau``.
+    - A dogmatic-true supporter leaf alone → ``(1, 0, 0, tau)``.
+    - A dogmatic supporter leaf vs a dogmatic attacker leaf → vacuous,
+      ``E = tau``.
     """
 
     @pytest.mark.unit
     def test_vacuous_edge_contributes_nothing(self):
-        """A supporter reached only through a vacuous edge → ``E = tau``."""
+        """A supporter leaf reached only through a vacuous edge → ``E = tau``.
+
+        Gate A2 §6.C: ``intrinsic["s"]`` is a genuine ``Opinion``, but the
+        vacuous *edge* discounts it to vacuous, so ``m`` falls back to
+        ``E = tau``.
+        """
         graph = BipolarOpinionGraph(
             arguments=frozenset({"m", "s"}),
-            base_rates={"m": _TAU, "s": 0.6},
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s": Opinion(0.8, 0.05, 0.15, 0.6),
+            },
             supports=frozenset({("s", "m")}),
             attacks=frozenset(),
             edge_opinions={("s", "m"): Opinion.vacuous(0.5)},
@@ -1087,84 +1135,46 @@ class TestBoundaryBehaviours:
 
     @pytest.mark.unit
     def test_dogmatic_supporter_alone_gives_full_belief(self):
-        """A single dogmatic-true supporter → ``omega_m = (1, 0, 0, tau)``.
+        """A single dogmatic-true supporter leaf → ``omega_m = (1, 0, 0, tau)``.
 
-        Gate A §4: the supporter node ``s`` is forced dogmatic-true by its
-        own dogmatic-true child through a dogmatic-true edge; the ``(s, m)``
-        edge is dogmatic-true and passes it through. Re-stamped to ``tau``.
+        Gate A2 §6.C: under the corrected model a leaf's intrinsic can be
+        ``dogmatic_true``. ``intrinsic["s"] = dogmatic_true(0.6)``; the
+        ``(s, m)`` edge is ``dogmatic_true`` and passes it through. Computed
+        result: ``omega_m = (1.0, 0.0, 0.0, 0.55)``.
         """
         graph = BipolarOpinionGraph(
-            arguments=frozenset({"m", "s", "g"}),
-            base_rates={"m": _TAU, "s": 0.5, "g": 0.5},
-            supports=frozenset({("s", "m"), ("g", "s")}),
-            attacks=frozenset(),
-            edge_opinions={
-                ("s", "m"): Opinion.dogmatic_true(0.5),
-                ("g", "s"): Opinion.dogmatic_true(0.5),
-            },
-        )
-        # 'g' is unargued → vacuous, so the chain stays vacuous. To force a
-        # dogmatic supporter, the edge opinion itself carries the dogmatic
-        # belief: dogmatic_true edge discounting vacuous 's' = vacuous.
-        # Instead model the dogmatic supporter directly on the edge:
-        graph = BipolarOpinionGraph(
             arguments=frozenset({"m", "s"}),
-            base_rates={"m": _TAU, "s": 0.5},
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s": Opinion.dogmatic_true(0.6),
+            },
             supports=frozenset({("s", "m")}),
             attacks=frozenset(),
             edge_opinions={("s", "m"): Opinion.dogmatic_true(0.5)},
         )
         result = evaluate(graph)
-        # 's' is vacuous; dogmatic_true.discount(vacuous) = vacuous → m vacuous.
-        # The dogmatic-supporter-alone semantics is asserted via a believed
-        # supporter below, where belief is genuinely present.
-        assert result["m"].u == approx(1.0)
-
-    @pytest.mark.unit
-    def test_dogmatic_believed_supporter_alone_gives_full_belief(self):
-        """A genuinely dogmatic supporter accrues to ``(1, 0, 0, tau)``.
-
-        The supporter's resolved opinion is dogmatic-true, reached through a
-        dogmatic-true edge. Build it: leaf is unargued, but the edge from
-        ``s`` to ``m`` carries the strength. Use a forced dogmatic supporter
-        — its node value must be dogmatic-true. Achieved by an objection on
-        ``s`` that is itself vacuous (no effect) and an edge of full trust;
-        since that still yields vacuous, this test models the dogmatic
-        supporter as the *edge opinion equal to its dogmatic child*: a
-        dogmatic-true child resolved via a dogmatic-true edge.
-        """
-        # 'g' forced: an unargued node is vacuous, NOT dogmatic. The only
-        # way a node becomes dogmatic-true is accrual producing u=0. A
-        # single dogmatic-true edge over a dogmatic-true child does that.
-        # Bootstrap a dogmatic-true node by self-evidence is impossible in a
-        # DAG, so the dogmatic supporter is supplied as the discounted
-        # result: edge_opinion dogmatic_true, child dogmatic_true.
-        # Model: 's' has a dogmatic-true supporter 'g' whose own opinion is
-        # dogmatic — but 'g' unargued is vacuous. Hence the dogmatic-child
-        # boundary is exercised through the CCF-level test below.
-        graph = BipolarOpinionGraph(
-            arguments=frozenset({"m", "s"}),
-            base_rates={"m": _TAU, "s": 0.5},
-            supports=frozenset({("s", "m")}),
-            attacks=frozenset(),
-            edge_opinions={("s", "m"): Opinion(0.95, 0.0, 0.05, 0.5)},
-        )
-        result = evaluate(graph)
-        # 's' vacuous → strong edge discounts vacuous to vacuous → m vacuous.
-        assert result["m"].expectation() == approx(_TAU)
+        assert result["m"].b == approx(1.0)
+        assert result["m"].d == approx(0.0)
+        assert result["m"].u == approx(0.0)
+        assert result["m"].a == approx(_TAU)
 
     @pytest.mark.unit
     def test_dogmatic_supporter_vs_dogmatic_attacker_is_vacuous(self):
-        """A dogmatic supporter against a dogmatic attacker → vacuous.
+        """A dogmatic supporter leaf against a dogmatic attacker leaf → vacuous.
 
-        Gate A §4 / §1: total conflict between certainties is honest
-        ignorance — ``omega_m = (0, 0, 1, tau)``, ``E = tau``. Modelled
-        with dogmatic-true edge opinions over leaf nodes; the symmetric
-        dogmatic support and dogmatic attack cancel into uncertainty.
+        Gate A2 §6.C / §5: total conflict between certainties is honest
+        ignorance — ``omega_m = (0, 0, 1, tau)``, ``E = tau``. Both ``s``
+        and ``o`` are leaves with ``dogmatic_true`` intrinsic opinions; the
+        symmetric dogmatic support and dogmatic attack cancel into
+        uncertainty.
         """
         graph = BipolarOpinionGraph(
             arguments=frozenset({"m", "s", "o"}),
-            base_rates={"m": _TAU, "s": 0.5, "o": 0.5},
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s": Opinion.dogmatic_true(0.5),
+                "o": Opinion.dogmatic_true(0.5),
+            },
             supports=frozenset({("s", "m")}),
             attacks=frozenset({("o", "m")}),
             edge_opinions={
@@ -1173,9 +1183,6 @@ class TestBoundaryBehaviours:
             },
         )
         result = evaluate(graph)
-        # 's' and 'o' are both unargued → vacuous; dogmatic_true edges
-        # discount vacuous children to vacuous → both sources vacuous →
-        # ccf(vacuous, ~vacuous) = vacuous → m vacuous, E = tau.
         assert result["m"].u == approx(1.0)
         assert result["m"].expectation() == approx(_TAU)
 
@@ -1196,22 +1203,20 @@ class TestDeterminism:
 
     @staticmethod
     def _example_graph() -> BipolarOpinionGraph:
+        """The Gate A2 worked-example graph (§4, §6.B) — ``s`` and ``o`` are
+        leaves carrying genuine intrinsic opinions."""
         return BipolarOpinionGraph(
-            arguments=frozenset({"m", "s", "o", "gs", "go"}),
-            base_rates={
-                "m": _TAU,
-                "s": 0.6,
-                "o": 0.5,
-                "gs": 0.5,
-                "go": 0.5,
+            arguments=frozenset({"m", "s", "o"}),
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "s": Opinion(0.7, 0.1, 0.2, 0.6),
+                "o": Opinion(0.4, 0.3, 0.3, 0.5),
             },
-            supports=frozenset({("s", "m"), ("gs", "s"), ("go", "o")}),
+            supports=frozenset({("s", "m")}),
             attacks=frozenset({("o", "m")}),
             edge_opinions={
-                ("s", "m"): Opinion(0.7, 0.1, 0.2, 0.6),
-                ("o", "m"): Opinion(0.4, 0.3, 0.3, 0.5),
-                ("gs", "s"): Opinion.dogmatic_true(0.5),
-                ("go", "o"): Opinion.dogmatic_true(0.5),
+                ("s", "m"): Opinion.dogmatic_true(0.5),
+                ("o", "m"): Opinion.dogmatic_true(0.5),
             },
         )
 
@@ -1231,41 +1236,39 @@ class TestDeterminism:
 
         ``frozenset`` and ``dict`` carry no semantic order, but to lock the
         intent: two ``BipolarOpinionGraph`` instances whose edge sets and
-        base-rate dicts were assembled in different orders must produce
+        intrinsic dicts were assembled in different orders must produce
         byte-identical results.
         """
-        edges_forward = [
-            ("s", "m"), ("gs", "s"), ("go", "o"),
-        ]
-        edges_reverse = list(reversed(edges_forward))
-        edge_ops = {
-            ("s", "m"): Opinion(0.7, 0.1, 0.2, 0.6),
-            ("gs", "s"): Opinion.dogmatic_true(0.5),
-            ("go", "o"): Opinion.dogmatic_true(0.5),
+        intrinsic_ops = {
+            "m": Opinion.vacuous(_TAU),
+            "s": Opinion(0.7, 0.1, 0.2, 0.6),
+            "o": Opinion(0.4, 0.3, 0.3, 0.5),
         }
-        attack_ops = {("o", "m"): Opinion(0.4, 0.3, 0.3, 0.5)}
+        edge_ops = {
+            ("s", "m"): Opinion.dogmatic_true(0.5),
+            ("o", "m"): Opinion.dogmatic_true(0.5),
+        }
 
-        def build(support_order, br_order):
-            base_rates = {
-                k: v
-                for k, v in br_order
-            }
-            edge_opinions = dict(edge_ops)
-            edge_opinions.update(attack_ops)
+        def build(intrinsic_order, support_order):
+            intrinsic = {k: v for k, v in intrinsic_order}
             return BipolarOpinionGraph(
-                arguments=frozenset({"m", "s", "o", "gs", "go"}),
-                base_rates=base_rates,
+                arguments=frozenset({"m", "s", "o"}),
+                intrinsic=intrinsic,
                 supports=frozenset(support_order),
                 attacks=frozenset({("o", "m")}),
-                edge_opinions=edge_opinions,
+                edge_opinions=dict(edge_ops),
             )
 
-        br_forward = [
-            ("m", _TAU), ("s", 0.6), ("o", 0.5), ("gs", 0.5), ("go", 0.5),
+        intrinsic_forward = [
+            ("m", intrinsic_ops["m"]),
+            ("s", intrinsic_ops["s"]),
+            ("o", intrinsic_ops["o"]),
         ]
-        br_reverse = list(reversed(br_forward))
-        g1 = build(edges_forward, br_forward)
-        g2 = build(edges_reverse, br_reverse)
+        intrinsic_reverse = list(reversed(intrinsic_forward))
+        supports_forward = [("s", "m")]
+        supports_reverse = list(reversed(supports_forward))
+        g1 = build(intrinsic_forward, supports_forward)
+        g2 = build(intrinsic_reverse, supports_reverse)
         r1 = evaluate(g1)
         r2 = evaluate(g2)
         for name in r1:
@@ -1275,7 +1278,11 @@ class TestDeterminism:
 
     @pytest.mark.unit
     def test_worked_example_deterministic_exact(self):
-        """The worked example evaluates to the locked value on every run."""
+        """The worked example evaluates to the locked value on every run.
+
+        Gate A2 §6.B: ``m`` components ``== (0.516, 0.208, 0.276, 0.55)``
+        over 5 runs.
+        """
         graph = self._example_graph()
         for _ in range(5):
             result = evaluate(graph)
@@ -1296,34 +1303,40 @@ class TestDeterminism:
 
 
 # ════════════════════════════════════════════════════════════════════
-# Single-source accrual — Gate A §4 step 4
+# Single-source accrual — Gate A2 §2 step 4
 # ════════════════════════════════════════════════════════════════════
 
 
 class TestSingleSourceAccrual:
-    """Gate A §4 step 4: a single evidence source is itself, re-stamped.
+    """Gate A2 §2 step 4: a single evidence source is itself, re-stamped.
 
-    With exactly one supporter (and no attacker), the accrued opinion's
-    ``(b, d, u)`` equals the discounted supporter's, with ``a`` re-stamped
-    to ``tau``.
+    With exactly one supporter (and no attacker) of a vacuous-intrinsic move
+    node, the accrued opinion's ``(b, d, u)`` equals the discounted
+    supporter's, with ``a`` re-stamped to ``tau``.
     """
 
     @pytest.mark.property
     @given(
         edge=valid_opinions(min_uncertainty=0.02),
+        intrinsic=valid_opinions(min_uncertainty=0.02),
         tau=base_rates_strategy(),
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
-    def test_single_supporter_restamps_base_rate(self, edge, tau):
-        """One supporter through one edge → ``omega_m.a == tau`` exactly.
+    def test_single_supporter_restamps_base_rate(self, edge, intrinsic, tau):
+        """One supporter leaf through one edge → ``omega_m.a == tau`` exactly.
 
-        The supporter node is unargued → vacuous; ``edge.discount(vacuous)``
-        is a single source. Whatever its ``(b, d, u)``, the accrued ``a``
-        must be ``tau`` (re-stamped), never the discounted source's ``a``.
+        The supporter ``s`` is a leaf carrying a genuine intrinsic opinion;
+        ``edge.discount(intrinsic)`` is the single accrual source for the
+        vacuous-intrinsic move ``m``. Whatever its ``(b, d, u)``, the
+        accrued ``a`` must be ``tau`` (re-stamped), never the discounted
+        source's ``a``.
         """
         graph = BipolarOpinionGraph(
             arguments=frozenset({"m", "s"}),
-            base_rates={"m": tau, "s": 0.5},
+            intrinsic={
+                "m": Opinion.vacuous(tau),
+                "s": intrinsic,
+            },
             supports=frozenset({("s", "m")}),
             attacks=frozenset(),
             edge_opinions={("s", "m"): edge},
@@ -1336,12 +1349,15 @@ class TestSingleSourceAccrual:
         """One objection alone (supporter absent) does not raise ``E``.
 
         A lone negated objection as the single source cannot push ``E``
-        above ``tau``; with an unargued (vacuous) objection node it holds at
-        ``tau``.
+        above ``tau``. With an objection leaf carrying a genuine intrinsic
+        opinion, the negated objection holds ``E`` at or below ``tau``.
         """
         graph = BipolarOpinionGraph(
             arguments=frozenset({"m", "o"}),
-            base_rates={"m": _TAU, "o": 0.5},
+            intrinsic={
+                "m": Opinion.vacuous(_TAU),
+                "o": Opinion(0.7, 0.1, 0.2, 0.5),
+            },
             supports=frozenset(),
             attacks=frozenset({("o", "m")}),
             edge_opinions={("o", "m"): _full_trust_edge()},
