@@ -38,6 +38,11 @@ invariant tests — per doxa's ``pyproject.toml`` marker registry.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
+
 import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
@@ -151,6 +156,78 @@ def star_graphs(draw):
         else:
             attacks.add(edge)
         edge_opinions[edge] = draw(valid_opinions(min_uncertainty=0.02))
+    return BipolarOpinionGraph(
+        arguments=frozenset(args),
+        intrinsic=intrinsic,
+        supports=frozenset(supports),
+        attacks=frozenset(attacks),
+        edge_opinions=edge_opinions,
+    )
+
+
+@st.composite
+def layered_dags(draw):
+    """Generate a random multi-layer DAG — 2-5 layers, acyclic by construction.
+
+    The single-layer ``star_graphs`` strategy never exercises
+    ``discount`` → ``ccf`` *chains*: every property test that consumed it
+    only ever saw a depth-1 graph, so the numerical-stability concern
+    (float drift along long multi-hop propagation) had no automated
+    regression guard (Gate D Minor 1).
+
+    This strategy draws a layered DAG: layer 0 holds leaf nodes carrying
+    genuine (drawn, non-vacuous) intrinsic ``Opinion``s — belief
+    originates there — and every later layer holds move nodes (vacuous
+    intrinsic) each drawing 1-k parents *strictly from earlier layers*.
+    Drawing parents only from earlier layers makes the graph acyclic by
+    construction. The result is a multi-hop DAG, so belief genuinely
+    propagates ``discount`` → ``ccf`` → ``discount`` → ``ccf`` across
+    layers and the float-drift / valid-``Opinion`` invariants are
+    exercised over chains, not just one layer.
+    """
+    n_layers = draw(st.integers(min_value=2, max_value=5))
+    layers: list[list[str]] = []
+    intrinsic: dict[str, Opinion] = {}
+    for layer_idx in range(n_layers):
+        width = draw(st.integers(min_value=1, max_value=3))
+        layer = [f"L{layer_idx}n{i}" for i in range(width)]
+        layers.append(layer)
+        for name in layer:
+            if layer_idx == 0:
+                # Layer-0 leaves carry genuine belief.
+                intrinsic[name] = draw(valid_opinions(min_uncertainty=0.02))
+            else:
+                # Later layers are move nodes — vacuous intrinsic.
+                intrinsic[name] = Opinion.vacuous(draw(base_rates_strategy()))
+
+    args = [name for layer in layers for name in layer]
+    supports: set[tuple[str, str]] = set()
+    attacks: set[tuple[str, str]] = set()
+    edge_opinions: dict[tuple[str, str], Opinion] = {}
+    for layer_idx in range(1, n_layers):
+        earlier = [name for layer in layers[:layer_idx] for name in layer]
+        for child in layers[layer_idx]:
+            k = draw(
+                st.integers(min_value=1, max_value=min(3, len(earlier)))
+            )
+            # sampled_from without replacement: distinct parents per child.
+            parents = draw(
+                st.lists(
+                    st.sampled_from(earlier),
+                    min_size=k,
+                    max_size=k,
+                    unique=True,
+                )
+            )
+            for parent in parents:
+                edge = (parent, child)
+                if draw(st.booleans()):
+                    supports.add(edge)
+                else:
+                    attacks.add(edge)
+                edge_opinions[edge] = draw(
+                    valid_opinions(min_uncertainty=0.02)
+                )
     return BipolarOpinionGraph(
         arguments=frozenset(args),
         intrinsic=intrinsic,
@@ -725,6 +802,55 @@ class TestSanityValidOpinions:
                 graph.intrinsic[name].a, abs=1e-9
             )
 
+    # --- Multi-layer DAG coverage — Gate D Minor 1 ---
+    #
+    # ``star_graphs`` is depth-1 only; these three property tests consume
+    # ``layered_dags`` so the ``discount`` → ``ccf`` *chain* case (2-5
+    # layers) is exercised — the float-drift / valid-``Opinion``
+    # invariants now have an automated regression guard over multi-hop
+    # propagation, not just one layer.
+
+    @pytest.mark.property
+    @given(layered_dags())
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    def test_multilayer_every_node_is_a_valid_opinion(self, graph):
+        """Every node of a multi-layer DAG is a valid ``Opinion``.
+
+        ``b + d + u == 1`` must hold at every layer — a regression that
+        introduced float drift only over multi-hop ``discount`` → ``ccf``
+        chains would fail here even though ``star_graphs`` (depth-1) would
+        not catch it.
+        """
+        result = evaluate(graph)
+        for name, omega in result.items():
+            assert isinstance(omega, Opinion), f"{name} is not an Opinion"
+            assert abs(omega.b + omega.d + omega.u - 1.0) < 1e-9, (
+                f"{name}: mass sum drifted off 1 over multi-hop propagation"
+            )
+
+    @pytest.mark.property
+    @given(layered_dags())
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    def test_multilayer_every_expectation_in_unit_interval(self, graph):
+        """Every node of a multi-layer DAG has ``expectation() ∈ [0, 1]``."""
+        result = evaluate(graph)
+        for name, omega in result.items():
+            e = omega.expectation()
+            assert -1e-9 <= e <= 1.0 + 1e-9, f"{name}: E={e} out of [0,1]"
+
+    @pytest.mark.property
+    @given(layered_dags())
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    def test_multilayer_covers_every_argument(self, graph):
+        """``evaluate`` resolves every argument of a multi-layer DAG.
+
+        A layered DAG is acyclic by construction (parents drawn only from
+        earlier layers), so Kahn's traversal must resolve every node — no
+        ``CyclicGraphError``, every declared argument keyed.
+        """
+        result = evaluate(graph)
+        assert set(result) == set(graph.arguments)
+
 
 # ════════════════════════════════════════════════════════════════════
 # Rationality sanity check 6 — weak/uncertain edge raises u, no fabrication
@@ -861,7 +987,25 @@ class TestSanityTopologicalCorrectness:
 
     @pytest.mark.unit
     def test_diamond_dag_resolves(self):
-        """A diamond DAG (one node feeds two parents that feed a sink)."""
+        """A diamond DAG resolves and belief propagates through fork-and-join.
+
+        Diamond: ``src → left``, ``src → right``, ``left → sink``,
+        ``right → sink``; all edges full-trust. The ``src`` leaf carries a
+        strong intrinsic ``(0.8, 0.05, 0.15, 0.6)`` — belief originates
+        there.
+
+        Gate D Minor 2: a key-set-only assertion would still pass if the
+        diamond wrongly collapsed every node to vacuous (belief failing to
+        propagate through the fork-and-join). The values below were
+        computed against the installed ``doxa`` package — a full-trust
+        edge passes its child's ``(b, d, u)`` through unchanged, so ``src``
+        keeps its intrinsic ``(0.8, 0.05, 0.15)``; ``left``/``right`` each
+        accrue a single discounted source equal to ``src``; ``sink``
+        accrues ``ccf`` of two identical ``(0.8, 0.05, 0.15)`` sources,
+        which is that same ``(0.8, 0.05, 0.15)``. Base rates: ``src.a``
+        stays ``0.6`` (its own intrinsic); the move nodes ``left``,
+        ``right``, ``sink`` re-stamp their vacuous intrinsic's ``a = 0.5``.
+        """
         graph = BipolarOpinionGraph(
             arguments=frozenset({"sink", "left", "right", "src"}),
             intrinsic={
@@ -888,6 +1032,22 @@ class TestSanityTopologicalCorrectness:
         )
         result = evaluate(graph)
         assert set(result) == {"sink", "left", "right", "src"}
+
+        # Belief must actually propagate through the fork-and-join — a
+        # diamond collapsing to all-vacuous would fail every line below.
+        for name in ("src", "left", "right", "sink"):
+            omega = result[name]
+            assert omega.b == approx(0.8), f"{name}.b: belief did not propagate"
+            assert omega.d == approx(0.05), f"{name}.d"
+            assert omega.u == approx(0.15), f"{name}.u"
+            assert omega.b > 0.0, f"{name}: collapsed to vacuous"
+
+        # Base rate is re-stamped from each node's own intrinsic, never
+        # fused: the ``src`` leaf keeps a=0.6, the move nodes keep a=0.5.
+        assert result["src"].a == approx(0.6)
+        assert result["left"].a == approx(0.5)
+        assert result["right"].a == approx(0.5)
+        assert result["sink"].a == approx(0.5)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1230,51 +1390,153 @@ class TestDeterminism:
         for name in first:
             assert first[name] == second[name], f"{name} differs across runs"
 
+    # The graph the two determinism tests below share: a move ``m`` with
+    # THREE supporters and TWO attackers — five incoming edges. With ≥ 2
+    # edges per relation the ``frozenset``/``dict`` constructors genuinely
+    # receive differently-ordered inputs (Gate D Minor 3: a single-element
+    # ``supports`` list reversed is identical, so the old test's ordering
+    # axis was vacuous). CCF is float arithmetic, so a traversal that
+    # ordered the source pool by ``frozenset`` iteration order — which
+    # varies with ``PYTHONHASHSEED`` — would produce a *different* fused
+    # ``m`` here; only the implementation's ``sorted(...)`` of the edge
+    # sets keeps the result invariant.
+    _MULTI_INTRINSIC = (
+        ("m", Opinion.vacuous(_TAU)),
+        ("s1", Opinion(0.7, 0.1, 0.2, 0.6)),
+        ("s2", Opinion(0.6, 0.2, 0.2, 0.5)),
+        ("s3", Opinion(0.5, 0.3, 0.2, 0.45)),
+        ("o1", Opinion(0.4, 0.3, 0.3, 0.5)),
+        ("o2", Opinion(0.55, 0.2, 0.25, 0.5)),
+    )
+    _MULTI_SUPPORTS = (("s1", "m"), ("s2", "m"), ("s3", "m"))
+    _MULTI_ATTACKS = (("o1", "m"), ("o2", "m"))
+    _MULTI_EDGE_OPS = (
+        (("s1", "m"), Opinion.dogmatic_true(0.5)),
+        (("s2", "m"), Opinion(0.3, 0.1, 0.6, 0.5)),
+        (("s3", "m"), Opinion.dogmatic_true(0.5)),
+        (("o1", "m"), Opinion.dogmatic_true(0.5)),
+        (("o2", "m"), Opinion(0.2, 0.2, 0.6, 0.5)),
+    )
+
+    @classmethod
+    def _build_multi(cls, intrinsic_pairs, support_seq, attack_seq,
+                     edge_pairs):
+        """Assemble the shared 5-edge graph from the given orderings."""
+        return BipolarOpinionGraph(
+            arguments=frozenset(k for k, _ in intrinsic_pairs),
+            intrinsic={k: v for k, v in intrinsic_pairs},
+            supports=frozenset(support_seq),
+            attacks=frozenset(attack_seq),
+            edge_opinions={k: v for k, v in edge_pairs},
+        )
+
     @pytest.mark.unit
     def test_evaluate_is_independent_of_input_ordering(self):
         """Equal graphs built with differently-ordered inputs evaluate equal.
 
-        ``frozenset`` and ``dict`` carry no semantic order, but to lock the
-        intent: two ``BipolarOpinionGraph`` instances whose edge sets and
-        intrinsic dicts were assembled in different orders must produce
-        byte-identical results.
+        Gate D Minor 3: this test must genuinely exercise what the
+        sorted-ready-set / ``sorted(edges)`` traversal defends against. It
+        builds the SAME 5-incoming-edge graph from forward and reversed
+        orderings of the intrinsic dict, the ``supports`` set (3 edges),
+        the ``attacks`` set (2 edges), and the ``edge_opinions`` dict — all
+        multi-element, so ``frozenset(...)`` / ``dict(...)`` genuinely
+        receive differently-ordered inputs. Without the implementation's
+        ``sorted(graph.supports)`` / ``sorted(graph.attacks)`` the CCF
+        source pool would be assembled in a different order and the float
+        result for ``m`` would diverge; with it the two results must be
+        byte-identical.
         """
-        intrinsic_ops = {
-            "m": Opinion.vacuous(_TAU),
-            "s": Opinion(0.7, 0.1, 0.2, 0.6),
-            "o": Opinion(0.4, 0.3, 0.3, 0.5),
-        }
-        edge_ops = {
-            ("s", "m"): Opinion.dogmatic_true(0.5),
-            ("o", "m"): Opinion.dogmatic_true(0.5),
-        }
-
-        def build(intrinsic_order, support_order):
-            intrinsic = {k: v for k, v in intrinsic_order}
-            return BipolarOpinionGraph(
-                arguments=frozenset({"m", "s", "o"}),
-                intrinsic=intrinsic,
-                supports=frozenset(support_order),
-                attacks=frozenset({("o", "m")}),
-                edge_opinions=dict(edge_ops),
-            )
-
-        intrinsic_forward = [
-            ("m", intrinsic_ops["m"]),
-            ("s", intrinsic_ops["s"]),
-            ("o", intrinsic_ops["o"]),
-        ]
-        intrinsic_reverse = list(reversed(intrinsic_forward))
-        supports_forward = [("s", "m")]
-        supports_reverse = list(reversed(supports_forward))
-        g1 = build(intrinsic_forward, supports_forward)
-        g2 = build(intrinsic_reverse, supports_reverse)
-        r1 = evaluate(g1)
-        r2 = evaluate(g2)
+        forward = self._build_multi(
+            self._MULTI_INTRINSIC,
+            self._MULTI_SUPPORTS,
+            self._MULTI_ATTACKS,
+            self._MULTI_EDGE_OPS,
+        )
+        reverse = self._build_multi(
+            tuple(reversed(self._MULTI_INTRINSIC)),
+            tuple(reversed(self._MULTI_SUPPORTS)),
+            tuple(reversed(self._MULTI_ATTACKS)),
+            tuple(reversed(self._MULTI_EDGE_OPS)),
+        )
+        r1 = evaluate(forward)
+        r2 = evaluate(reverse)
+        assert set(r1) == set(r2)
         for name in r1:
             assert r1[name] == r2[name], (
                 f"{name} differs across input orderings"
             )
+
+    @pytest.mark.unit
+    def test_evaluate_is_independent_of_pythonhashseed(self):
+        """``evaluate`` is bit-identical under a forced non-default hash seed.
+
+        Gate D Minor 3: the genuine determinism risk is ``frozenset``
+        iteration order varying with ``PYTHONHASHSEED``. ``PYTHONHASHSEED``
+        must be set *before* the interpreter starts — it cannot be changed
+        in-process — so this runs ``evaluate`` on the shared 5-edge graph
+        in two child interpreters, one under the default seed (``"0"``,
+        hashing disabled) and one under a forced non-default seed, and
+        asserts the printed ``(b, d, u, a)`` tuples are character-for-
+        character identical. If the traversal leaked ``frozenset``
+        iteration order into the CCF source-pool order, the float result
+        for ``m`` would differ between the two seeds and this test would
+        fail.
+        """
+        script = textwrap.dedent(
+            """
+            from doxa import Opinion
+            from doxa.argumentation import BipolarOpinionGraph, evaluate
+
+            graph = BipolarOpinionGraph(
+                arguments=frozenset({"m", "s1", "s2", "s3", "o1", "o2"}),
+                intrinsic={
+                    "m": Opinion.vacuous(0.55),
+                    "s1": Opinion(0.7, 0.1, 0.2, 0.6),
+                    "s2": Opinion(0.6, 0.2, 0.2, 0.5),
+                    "s3": Opinion(0.5, 0.3, 0.2, 0.45),
+                    "o1": Opinion(0.4, 0.3, 0.3, 0.5),
+                    "o2": Opinion(0.55, 0.2, 0.25, 0.5),
+                },
+                supports=frozenset(
+                    {("s1", "m"), ("s2", "m"), ("s3", "m")}
+                ),
+                attacks=frozenset({("o1", "m"), ("o2", "m")}),
+                edge_opinions={
+                    ("s1", "m"): Opinion.dogmatic_true(0.5),
+                    ("s2", "m"): Opinion(0.3, 0.1, 0.6, 0.5),
+                    ("s3", "m"): Opinion.dogmatic_true(0.5),
+                    ("o1", "m"): Opinion.dogmatic_true(0.5),
+                    ("o2", "m"): Opinion(0.2, 0.2, 0.6, 0.5),
+                },
+            )
+            result = evaluate(graph)
+            for name in sorted(result):
+                o = result[name]
+                print(f"{name} {o.b!r} {o.d!r} {o.u!r} {o.a!r}")
+            """
+        )
+
+        def run_under_seed(seed: str) -> str:
+            env = dict(os.environ)
+            env["PYTHONHASHSEED"] = seed
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+            return completed.stdout
+
+        default_seed = run_under_seed("0")
+        forced_seed = run_under_seed("524287")
+        assert default_seed != "", "child interpreter produced no output"
+        assert default_seed == forced_seed, (
+            "evaluate output depends on PYTHONHASHSEED — frozenset "
+            "iteration order leaked into the traversal\n"
+            f"default seed:\n{default_seed}\n"
+            f"forced seed:\n{forced_seed}"
+        )
 
     @pytest.mark.unit
     def test_worked_example_deterministic_exact(self):
