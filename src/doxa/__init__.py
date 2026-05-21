@@ -9,6 +9,15 @@ The kernel is intentionally pure — no provenance, no persistence, no framework
 coupling. It is usable by anyone who needs an honest algebra of uncertain
 probability.
 
-The `Opinion` type and fusion operators are not yet defined in this scaffold
-release; they arrive in a subsequent kernel commit.
+Public API
+----------
+- ``Opinion`` — a subjective opinion ω = (b, d, u, a), with negation,
+  conjunction/disjunction, consensus, discounting, uncertainty maximization,
+  ordering, the Beta-evidence conversion, and the ``wbf``/``ccf``/``fuse``
+  multi-source fusion operators.
+- ``BetaEvidence`` — the (r, s, a) Beta-evidence representation.
 """
+
+from doxa.opinion import BetaEvidence, Opinion
+
+__all__ = ["BetaEvidence", "Opinion"]
