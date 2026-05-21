@@ -1,10 +1,13 @@
 """Opinion-valued bipolar argumentation semantics — a gradual QBAF whose
 carried value is a Jøsang opinion.
 
-A bipolar argument graph: nodes carry a base rate (tau = a), edges carry
+A bipolar argument graph: each argument carries an intrinsic Opinion (its own
+evidence before supporters/attackers; tau = a is intrinsic[x].a), edges carry
 support/attack opinions (edge strength/trust). The graph is evaluated
-bottom-up over a DAG to a per-argument Opinion. Acyclic only; a cycle
-raises CyclicGraphError.
+bottom-up over a DAG to a per-argument Opinion. A leaf resolves to its
+intrinsic opinion — that is where belief originates; a move node carries a
+vacuous intrinsic and falls back to E = tau when unargued. Acyclic only; a
+cycle raises CyclicGraphError.
 
 Pure: zero runtime dependencies, no I/O, no framework coupling.
 """
@@ -42,38 +45,34 @@ class BipolarOpinionGraph:
     """
 
     arguments: frozenset[str]
-    base_rates: Mapping[str, float]                   # tau = a per argument, each in (0, 1)
+    intrinsic: Mapping[str, Opinion]                  # per-argument own opinion; tau = intrinsic[x].a
     supports: frozenset[tuple[str, str]]              # (supporter, target)
     attacks: frozenset[tuple[str, str]]               # (attacker, target)
     edge_opinions: Mapping[tuple[str, str], Opinion]  # per-edge strength/trust
 
     def __post_init__(self) -> None:
-        """Run the seven locked construction-time validations, in order.
+        """Run the six locked construction-time validations, in order.
 
         Every failure is an explicit ``raise ValueError`` (never ``assert``
         — asserts vanish under ``python -O``). Acyclicity is the one check
-        deferred to ``evaluate``.
+        deferred to ``evaluate``. The base-rate-range check of the prior
+        (Gate A) design is gone: ``tau`` is now ``intrinsic[x].a``, already
+        validated to ``(0, 1)`` by ``Opinion.__post_init__`` when the
+        intrinsic ``Opinion`` is constructed — a graph-level check would be
+        dead code.
         """
-        # --- Check 1: base_rates covers exactly arguments ---
-        base_rate_keys = frozenset(self.base_rates)
-        if base_rate_keys != self.arguments:
-            missing = self.arguments - base_rate_keys
-            extra = base_rate_keys - self.arguments
+        # --- Check 1: intrinsic covers exactly arguments ---
+        intrinsic_keys = frozenset(self.intrinsic)
+        if intrinsic_keys != self.arguments:
+            missing = self.arguments - intrinsic_keys
+            extra = intrinsic_keys - self.arguments
             raise ValueError(
-                "base_rates must cover exactly the declared arguments; "
-                f"missing base rates for {sorted(missing)}, "
-                f"base rates for undeclared arguments {sorted(extra)}"
+                "intrinsic must cover exactly the declared arguments; "
+                f"missing intrinsic opinions for {sorted(missing)}, "
+                f"intrinsic opinions for undeclared arguments {sorted(extra)}"
             )
 
-        # --- Check 2: every base rate in the open interval (0, 1) ---
-        for arg, rate in self.base_rates.items():
-            if not (0.0 < rate < 1.0):
-                raise ValueError(
-                    f"base rate for argument {arg!r} is {rate}; "
-                    "must lie in the open interval (0, 1)"
-                )
-
-        # --- Check 3: support edges reference only declared arguments ---
+        # --- Check 2: support edges reference only declared arguments ---
         for src, dst in self.supports:
             if src not in self.arguments or dst not in self.arguments:
                 raise ValueError(
@@ -81,7 +80,7 @@ class BipolarOpinionGraph:
                     "undeclared argument"
                 )
 
-        # --- Check 4: attack edges reference only declared arguments ---
+        # --- Check 3: attack edges reference only declared arguments ---
         for src, dst in self.attacks:
             if src not in self.arguments or dst not in self.arguments:
                 raise ValueError(
@@ -89,7 +88,7 @@ class BipolarOpinionGraph:
                     "undeclared argument"
                 )
 
-        # --- Check 5: supports and attacks are disjoint ---
+        # --- Check 4: supports and attacks are disjoint ---
         overlap = self.supports & self.attacks
         if overlap:
             raise ValueError(
@@ -97,7 +96,7 @@ class BipolarOpinionGraph:
                 f"overlapping edges: {sorted(overlap)}"
             )
 
-        # --- Check 6: edge_opinions keys exactly cover supports ∪ attacks ---
+        # --- Check 5: edge_opinions keys exactly cover supports ∪ attacks ---
         all_edges = self.supports | self.attacks
         opinion_keys = frozenset(self.edge_opinions)
         if opinion_keys != all_edges:
@@ -109,7 +108,7 @@ class BipolarOpinionGraph:
                 f"opinions for non-edges: {sorted(extra_op)}"
             )
 
-        # --- Check 7: no self-loops ---
+        # --- Check 6: no self-loops ---
         for src, dst in all_edges:
             if src == dst:
                 raise ValueError(
@@ -187,20 +186,29 @@ def _accrue(
 ) -> Opinion:
     """Compute the resolved opinion for argument ``x``.
 
-    Implements Gate A §4 with the locked CCF accrual operator:
+    Implements the Gate A2 §2 corrected "Model C" accrual with the locked
+    CCF operator:
 
     1. Per-edge discounting — discount each child's resolved opinion through
        its edge opinion (``edge_opinion.discount(child_opinion)``).
     2. Negate each discounted attacker (``~``): an attacker's belief in its
        own claim becomes disbelief in ``x``.
-    3. Assemble one flat source list: discounted supporters followed by
-       negated discounted attackers.
-    4. Accrue: empty → ``Opinion.vacuous(tau)``; single → that source;
-       N → one ``Opinion.ccf(*sources)`` call.
+    3. Assemble the source pool: discounted supporters followed by negated
+       discounted attackers. Model C — the node's *intrinsic* opinion leads
+       the pool **iff it is non-vacuous** (``intrinsic.u < 1.0 - _TOL``). A
+       non-vacuous intrinsic (a leaf's own evidence, an objection's
+       severity) is genuine evidence and must enter the CCF accrual; a
+       vacuous intrinsic (a move node, no own evidence) carries nothing and
+       is dropped — including it would only corrupt CCF's min-consensus at
+       arity >= 3 (Gate A2 §2-3).
+    4. Accrue: empty pool → ``Opinion.vacuous(tau)`` (only a vacuous-
+       intrinsic node with no edges reaches this); single source → that
+       source; N → one ``Opinion.ccf(*pool)`` call.
     5. Re-stamp ``a = tau_x`` (the intrinsic prior, never fused), carrying
        ``allow_dogmatic`` so a dogmatic fused result is accepted.
     """
-    tau_x = graph.base_rates[x]
+    intrinsic_x = graph.intrinsic[x]
+    tau_x = intrinsic_x.a
 
     sources: list[Opinion] = []
 
@@ -222,17 +230,27 @@ def _accrue(
             o_disc = graph.edge_opinions[(src, dst)].discount(omega[src])
             sources.append(~o_disc)
 
+    # Step 3 — assemble the pool. The intrinsic leads iff it is non-vacuous:
+    # vacuous(tau).u == 1.0 exactly, so ``< 1.0 - _TOL`` cleanly separates a
+    # vacuous intrinsic (dropped) from a near-vacuous deliberate weak prior
+    # (kept). (Gate A2 §2 step 3.)
+    if intrinsic_x.u < 1.0 - _TOL:
+        pool = [intrinsic_x, *sources]
+    else:
+        pool = sources
+
     # Step 4 — accrue with the locked CCF operator.
-    if not sources:
-        # Unargued argument → total ignorance, projecting to exactly tau.
+    if not pool:
+        # Only reachable for a move node (vacuous intrinsic) with no edges
+        # → total ignorance, projecting to exactly tau.
         return Opinion.vacuous(tau_x)
-    if len(sources) == 1:
+    if len(pool) == 1:
         # A single source is itself (Opinion.ccf(x) returns x unchanged);
         # spelled out to avoid the needless call and document intent.
-        fused = sources[0]
+        fused = pool[0]
     else:
-        # CCF is not associative — one N-source call over the full list.
-        fused = Opinion.ccf(*sources)
+        # CCF is not associative — one N-source call over the full pool.
+        fused = Opinion.ccf(*pool)
 
     # Step 5 — re-stamp a = tau_x; carry the dogmatic flag.
     return Opinion(
