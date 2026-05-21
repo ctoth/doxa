@@ -1,0 +1,19 @@
+.venv/
+.pytest_cache/
+.hypothesis/
+__pycache__/
+*.py[cod]
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Papers: keep notes/markdown/metadata in the tree, binaries only on disk.
+*.pdf
+*.png
+
+# foreman coordination scaffolding
+prompts/
+reports/
+notes-foreman-status.md

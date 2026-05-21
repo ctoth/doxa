@@ -1,0 +1,14 @@
+{
+  "title": "Multi-Source Fusion Operations in Subjective Logic",
+  "authors": [
+    "Rens Wouter van der Heijden",
+    "Henning Kopp",
+    "Frank Kargl"
+  ],
+  "year": "2018",
+  "arxiv_id": "1805.01388",
+  "doi": null,
+  "abstract": "The purpose of multi-source fusion is to combine information from more than two evidence sources, or multiple opinions from multiple actors. For subjective logic, a number of different fusion operators have been proposed, each satisfying a specific set of criteria, which make them appropriate for different use cases. Some of these operators are associative, and therefore multi-source fusion is well-defined for these operators. In this paper, we provide multi-source fusion for the remaining operators, including weighted belief fusion (WBF) and consensus & compromise fusion (CCF). By linking the WBF to the notion of confidence-weighted averaging of Dirichlet hyper-probability distributions, we show that the derived multi-source fusion produces valid opinions, and explore the relationship with Dirichlet PDFs.",
+  "url": "https://arxiv.org/abs/1805.01388",
+  "pdf_url": "https://arxiv.org/pdf/1805.01388"
+}

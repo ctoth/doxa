@@ -1,0 +1,218 @@
+source:
+  paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+produced_by:
+  agent: "claude-opus-4-6"
+  skill: "extract-claims"
+  timestamp: "2026-03-28T21:49:49Z"
+
+claims:
+  - id: claim1
+    type: observation
+    statement: "Multinomial opinions in subjective logic are bijectively mapped to Dirichlet hyper-probability distributions via evidence parameters r(x) = W * b(x) / u and uncertainty u = W / (W + sum(r(x)))."
+    concepts:
+      - multinomial_opinion
+      - dirichlet_distribution
+      - binomial_opinion_uncertainty
+      - binomial_opinion_belief
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 2
+      section: "II. Mapping Opinions to Dirichlet PDFs"
+      quote_fragment: "We now introduce the relation between opinions and Dirichlet HPDs"
+
+  - id: claim2
+    type: equation
+    expression: "P(x) = b(x) + a(x) * u"
+    sympy: "Eq(projected_probability, binomial_opinion_belief + binomial_opinion_base_rate * binomial_opinion_uncertainty)"
+    variables:
+      - symbol: "P(x)"
+        concept: "projected_probability"
+        role: "dependent"
+      - symbol: "b(x)"
+        concept: "binomial_opinion_belief"
+        role: "independent"
+      - symbol: "a(x)"
+        concept: "binomial_opinion_base_rate"
+        role: "independent"
+      - symbol: "u"
+        concept: "binomial_opinion_uncertainty"
+        role: "independent"
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 2
+      section: "II. Mapping Opinions to Dirichlet PDFs"
+
+  - id: claim3
+    type: observation
+    statement: "Weighted belief fusion (WBF) of multiple subjective logic opinions is equivalent to confidence-weighted averaging of the evidence parameters of the corresponding Dirichlet hyper-probability distributions."
+    concepts:
+      - weighted_belief_fusion
+      - dirichlet_distribution
+      - multinomial_opinion
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 5
+      section: "III-B. Weighted Belief Fusion"
+      quote_fragment: "Theorem 1. Our definition of weighted belief fusion of opinions for multiple sources is compatible with weighted belief fusion of Dirichlet HPDs"
+
+  - id: claim4
+    type: equation
+    expression: "b_fused(x) = sum_i(b_i(x)/u_i * prod_{j!=i} u_j) / (sum_i((1-u_i)/u_i * prod_j u_j) + prod_j u_j)"
+    notes: "N-source formula; not expressible as fixed-arity SymPy"
+    variables:
+      - symbol: "b_fused(x)"
+        concept: "weighted_belief_fusion"
+        role: "dependent"
+      - symbol: "b_i(x)"
+        concept: "binomial_opinion_belief"
+        role: "independent"
+      - symbol: "u_i"
+        concept: "binomial_opinion_uncertainty"
+        role: "independent"
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 4
+      section: "III-B. Weighted Belief Fusion"
+      quote_fragment: "Definition 4"
+
+  - id: claim5
+    type: equation
+    expression: "u_fused = prod_j(u_j) / (sum_i((1-u_i)/u_i * prod_j u_j) + prod_j u_j)"
+    notes: "N-source formula; not expressible as fixed-arity SymPy"
+    variables:
+      - symbol: "u_fused"
+        concept: "wbf_fused_uncertainty"
+        role: "dependent"
+      - symbol: "u_i"
+        concept: "binomial_opinion_uncertainty"
+        role: "independent"
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 5
+      section: "III-B. Weighted Belief Fusion"
+      quote_fragment: "Definition 4"
+
+  - id: claim6
+    type: observation
+    statement: "When exactly one source has dogmatic opinion (u=0) and all others have u>0, weighted belief fusion produces that dogmatic source's belief distribution as the fused result."
+    concepts:
+      - weighted_belief_fusion
+      - binomial_opinion_uncertainty
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 5
+      section: "III-B. Weighted Belief Fusion"
+      quote_fragment: "Remark 1 (Dogmatic opinions)"
+
+  - id: claim7
+    type: observation
+    statement: "When all sources are vacuous (all u=1, no evidence), weighted belief fusion produces the vacuous opinion: b(x)=0 for all x, u=1."
+    concepts:
+      - weighted_belief_fusion
+      - binomial_opinion_uncertainty
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 5
+      section: "III-B. Weighted Belief Fusion"
+      quote_fragment: "Remark 3 (No evidence). If no evidence is available... the fused opinion should obviously also have no evidence"
+
+  - id: claim8
+    type: comparison
+    statement: "Unlike Josang 2016 Ch.12 which uses simple averaging for base rates in multi-source cumulative and averaging belief fusion, the correct formulation requires confidence-weighted averaging of base rates."
+    concepts:
+      - weighted_belief_fusion
+      - binomial_opinion_base_rate
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 3
+      section: "IV. Cumulative and Averaging Belief Fusion"
+      quote_fragment: "the base rate equations for the cumulative and averaging operations are incorrect"
+
+  - id: claim9
+    type: observation
+    statement: "All sources in weighted belief fusion must share the same base rate; the fused opinion's base rate equals this shared base rate."
+    concepts:
+      - weighted_belief_fusion
+      - binomial_opinion_base_rate
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 5
+      section: "III-B. Weighted Belief Fusion"
+      quote_fragment: "all sources must share the same base rate"
+
+  - id: claim10
+    type: mechanism
+    statement: "Consensus & compromise fusion (CCF) works by a three-phase algorithm: (1) consensus phase extracts minimum belief per value across all sources, (2) compromise phase distributes residual beliefs weighted by other sources' uncertainties, (3) normalization phase scales to ensure valid opinion constraints."
+    concepts:
+      - consensus_compromise_fusion
+      - multinomial_opinion
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 6
+      section: "V. CC Fusion"
+      quote_fragment: "CC fusion is defined as the result of the following three computation phases: 1) consensus phase, 2) compromise phase, 3) normalization phase"
+
+  - id: claim11
+    type: equation
+    expression: "b_consensus(x) = min_i(b_i(x)) for each x"
+    notes: "N-source formula; Min over variable number of sources"
+    variables:
+      - symbol: "b_consensus(x)"
+        concept: "consensus_belief"
+        role: "dependent"
+      - symbol: "b_i(x)"
+        concept: "binomial_opinion_belief"
+        role: "independent"
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 6
+      section: "V. CC Fusion"
+      quote_fragment: "Step 1. Consensus Phase"
+
+  - id: claim12
+    type: observation
+    statement: "Belief constraint fusion (BCF) for multiple sources generalizes Dempster's combination rule by computing N-fold intersections of focal elements across all sources and normalizing by excluding empty-set mass."
+    concepts:
+      - belief_constraint_fusion
+      - dempster_shafer_combination
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 3
+      section: "III-A. Belief Constraint Fusion"
+      quote_fragment: "Definition 3"
+
+  - id: claim13
+    type: observation
+    statement: "Some subjective logic fusion operators (including CBF and ABF) lack associativity, so iterating binary fusion pairwise for N>2 sources produces order-dependent results; direct N-source definitions are required."
+    concepts:
+      - weighted_belief_fusion
+      - multinomial_opinion
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 1
+      section: "I. Introduction"
+      quote_fragment: "some of these operators are associative, and therefore multi-source fusion is well-defined for these operators"
+
+  - id: claim14
+    type: limitation
+    statement: "Consensus & compromise fusion (CCF) compatibility with Dirichlet HPD operations is not proven; the equivalence is only established for weighted belief fusion."
+    concepts:
+      - consensus_compromise_fusion
+      - dirichlet_distribution
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 7
+      section: "VI. Discussion"
+      quote_fragment: "this fusion operation is defined for subjective logic only, we do not prove it equivalent to other operations in other models"
+
+  - id: claim15
+    type: parameter
+    concept: non_informative_prior_weight
+    value: 2
+    unit: "dimensionless"
+    provenance:
+      paper: vanderHeijden_2018_MultiSourceFusionOperationsSubjectiveLogic
+      page: 2
+      section: "II. Mapping Opinions to Dirichlet PDFs"
+      quote_fragment: "W is the non-informative prior weight"
+    notes: "Default W=2 for binomial case; W=k for k-nomial frames"

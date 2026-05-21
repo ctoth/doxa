@@ -1,0 +1,4 @@
+---
+tags: [subjective-logic, uncertainty, probability, dempster-shafer, trust]
+---
+Defines subjective logic, a framework where uncertain probabilities are represented as opinion tuples (belief, disbelief, uncertainty, atomicity) with b+d+u=1, supporting propositional operators (AND, OR, NOT) and evidential operators (discounting for trust transitivity, consensus for cumulative fusion). The paper proves a bijective mapping between opinions and Beta probability density functions, shows that probability expectation satisfies Kolmogorov axioms, and demonstrates that the consensus operator resolves paradoxes where Dempster's rule fails. Directly applicable to propstore as a replacement for bare-float probability in claim confidence, enabling formal representation of ignorance (vacuous opinions), trust-discounted source chains, and principled multi-source fusion via the consensus operator.
