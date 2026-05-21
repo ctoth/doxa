@@ -27,8 +27,6 @@ invariant tests — per doxa's ``pyproject.toml`` marker registry.
 
 from __future__ import annotations
 
-import math
-
 import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st

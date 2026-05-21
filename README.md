@@ -34,6 +34,10 @@ dogmatic opinion (`u = 0`) is an ordinary probability.
 - **Multi-source fusion** — N-source Weighted Belief Fusion (WBF) and Consensus
   & Compromise Fusion (CCF) from van der Heijden et al. 2018, plus a `fuse`
   dispatcher.
+- **Opinion-valued argumentation** — `BipolarOpinionGraph` and `evaluate`:
+  a bipolar (support/attack) argument graph whose edges carry opinions,
+  evaluated bottom-up to a per-argument `Opinion`. Disagreement between
+  arguments becomes honest uncertainty, not fake confidence.
 
 ## Theory and grounding
 
@@ -53,6 +57,14 @@ dogmatic opinion (`u = 0`) is an ordinary probability.
 
 Each operator's docstring cites the specific definition or theorem it
 implements.
+
+The `argumentation` module is a modest fusion of two mature research lines —
+subjective-logic argumentation (which attaches opinions to arguments but
+evaluates them with *crisp* semantics) and gradual QBAF semantics (which
+propagates argument strength *gradually* but only as scalars) — propagating a
+full opinion through a bipolar argument graph using only operators already in
+the kernel. CCF (van der Heijden et al. 2018, Definition 5) is the accrual
+operator; no new algebra is introduced.
 
 ## Install
 
@@ -163,6 +175,44 @@ opinion = evidence.to_opinion()
 back = opinion.to_beta_evidence()           # round-trips to r=8, s=2
 ```
 
+### Argumentation
+
+A `BipolarOpinionGraph` is a bipolar argument graph: each argument carries a
+base rate (`tau = a`, its intrinsic prior), and each support/attack edge
+carries an `Opinion` (the edge's strength/trust). `evaluate` resolves it
+bottom-up over the DAG to a per-argument `Opinion`:
+
+```python
+from doxa import BipolarOpinionGraph, Opinion, evaluate
+
+# Move 'm' (tau = 0.55) with one supporter 's' and one objection 'o'.
+# 's' and 'o' are forced dogmatic-true by dogmatic-true children, so each
+# edge opinion below IS the discounted argument opinion that reaches 'm'.
+graph = BipolarOpinionGraph(
+    arguments=frozenset({"m", "s", "o", "gs", "go"}),
+    base_rates={"m": 0.55, "s": 0.6, "o": 0.5, "gs": 0.5, "go": 0.5},
+    supports=frozenset({("s", "m"), ("gs", "s"), ("go", "o")}),
+    attacks=frozenset({("o", "m")}),
+    edge_opinions={
+        ("s", "m"): Opinion(0.7, 0.1, 0.2, 0.6),   # the supporter's strength
+        ("o", "m"): Opinion(0.4, 0.3, 0.3, 0.5),   # the objection's strength
+        ("gs", "s"): Opinion.dogmatic_true(0.5),
+        ("go", "o"): Opinion.dogmatic_true(0.5),
+    },
+)
+
+result = evaluate(graph)            # dict[str, Opinion], one entry per argument
+omega_m = result["m"]               # Opinion(b≈0.516, d≈0.208, u≈0.276, a=0.55)
+omega_m.expectation()               # ≈ 0.668  (the strong supporter pulls E above tau)
+```
+
+The strong supporter raises the move's projected strength above its base
+rate, the weaker objection holds it down, and `u` stays substantial (≈ 0.276)
+because the two arguments disagree — disagreement becomes honest uncertainty.
+An unargued argument resolves to `Opinion.vacuous(tau)`, so `expectation()`
+falls back to exactly `tau`. `evaluate` raises `CyclicGraphError` if the graph
+contains a cycle.
+
 ## API overview
 
 ### `Opinion(b, d, u, a, allow_dogmatic=False)`
@@ -188,6 +238,34 @@ must pass `allow_dogmatic=True`.
 A frozen evidence-count record: `r >= 0` positive, `s >= 0` negative,
 `0 < a < 1`. `to_opinion()` maps it to an `Opinion`. (Converting an `Opinion`
 back uses `Opinion.to_beta_evidence()`, which raises for dogmatic opinions.)
+
+### Argumentation
+
+#### `BipolarOpinionGraph(arguments, base_rates, supports, attacks, edge_opinions)`
+
+A frozen bipolar argument graph. Five required fields:
+
+- `arguments: frozenset[str]` — the argument node identifiers.
+- `base_rates: Mapping[str, float]` — `tau = a` per argument, each in `(0, 1)`.
+- `supports: frozenset[tuple[str, str]]` — support edges `(supporter, target)`.
+- `attacks: frozenset[tuple[str, str]]` — attack edges `(attacker, target)`.
+- `edge_opinions: Mapping[tuple[str, str], Opinion]` — the per-edge
+  strength/trust opinion for every edge.
+
+Construction validates the graph (raising `ValueError`): `base_rates` covers
+exactly `arguments`; every base rate in `(0, 1)`; support and attack edges
+reference only declared arguments; `supports` and `attacks` are disjoint;
+`edge_opinions` has exactly one opinion per edge; no self-loops. Acyclicity is
+*not* checked at construction — it is checked by `evaluate`.
+
+#### `evaluate(graph) -> dict[str, Opinion]`
+
+Resolves every argument bottom-up over the DAG (Kahn's algorithm with a sorted
+ready set — deterministic), returning a dict mapping each argument name to its
+`Opinion`. Each argument's opinion is accrued from its discounted supporters
+and negated discounted attackers with the CCF fusion operator, re-stamped with
+the argument's own base rate. Raises `CyclicGraphError` (a `ValueError`
+subclass) if the graph contains a cycle.
 
 ## Typing
 

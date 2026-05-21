@@ -16,8 +16,19 @@ Public API
   ordering, the Beta-evidence conversion, and the ``wbf``/``ccf``/``fuse``
   multi-source fusion operators.
 - ``BetaEvidence`` — the (r, s, a) Beta-evidence representation.
+- ``BipolarOpinionGraph``, ``evaluate``, ``CyclicGraphError`` — an
+  opinion-valued bipolar argument graph: arguments carry a base rate
+  (``tau = a``), edges carry support/attack opinions, and ``evaluate``
+  computes a per-argument ``Opinion`` bottom-up over the DAG.
 """
 
+from doxa.argumentation import BipolarOpinionGraph, CyclicGraphError, evaluate
 from doxa.opinion import BetaEvidence, Opinion
 
-__all__ = ["BetaEvidence", "Opinion"]
+__all__ = [
+    "BetaEvidence",
+    "BipolarOpinionGraph",
+    "CyclicGraphError",
+    "Opinion",
+    "evaluate",
+]
