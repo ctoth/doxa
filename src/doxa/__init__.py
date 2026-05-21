@@ -22,15 +22,27 @@ Public API
   carry support/attack opinions, and ``evaluate`` computes a per-argument
   ``Opinion`` bottom-up over the DAG. A leaf resolves to its intrinsic
   opinion; a move node's intrinsic is ``Opinion.vacuous(tau)``.
+- ``opinion_sensitivity``, ``graph_perturbation_sensitivity`` — perturbation
+  sensitivity of doxa's outputs: how much a fused expectation, or an
+  argument's resolved opinion, depends on one of its inputs.
+- ``backup_ccf``, ``backup_minimax`` — the opinion-backup operator: propagate
+  opinions up a game-search tree (CCF-over-replies primary; hard
+  opinion-minimax control).
 """
 
 from doxa.argumentation import BipolarOpinionGraph, CyclicGraphError, evaluate
+from doxa.backup import backup_ccf, backup_minimax
 from doxa.opinion import BetaEvidence, Opinion
+from doxa.sensitivity import graph_perturbation_sensitivity, opinion_sensitivity
 
 __all__ = [
     "BetaEvidence",
     "BipolarOpinionGraph",
     "CyclicGraphError",
     "Opinion",
+    "backup_ccf",
+    "backup_minimax",
     "evaluate",
+    "graph_perturbation_sensitivity",
+    "opinion_sensitivity",
 ]
