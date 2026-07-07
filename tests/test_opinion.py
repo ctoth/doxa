@@ -929,15 +929,36 @@ class TestFuse:
         assert abs(result_fuse.d - result_wbf.d) < 1e-9
         assert abs(result_fuse.u - result_wbf.u) < 1e-9
 
-    def test_fuse_auto_handles_dogmatic_wbf_case(self):
-        """For dogmatic inputs, fuse(auto) uses WBF Definition 4 Case 2.
+    def test_fuse_auto_routes_dogmatic_to_ccf(self):
+        """For dogmatic inputs, fuse(auto) dispatches to CCF (Definition 5).
 
-        van der Heijden et al. 2018, Definition 4 (p. 5, Remark 1).
+        Two dogmatic sources in total disagreement must fuse to
+        uncertainty, not to fractional belief with zero uncertainty
+        (van der Heijden et al. 2018, Definition 5). WBF Definition 4
+        Case 2 dominance remains available via method="wbf".
         """
         dt = Opinion.dogmatic_true(0.5)
         df = Opinion.dogmatic_false(0.5)
         result = Opinion.fuse(dt, df, method="auto")
-        assert abs(result.b + result.d + result.u - 1.0) < 1e-6
+        expected = Opinion.ccf(dt, df)
+        assert abs(result.b - expected.b) < 1e-9
+        assert abs(result.d - expected.d) < 1e-9
+        assert abs(result.u - expected.u) < 1e-9
+        assert result.u > 0.9, (
+            "total dogmatic disagreement must route to uncertainty, "
+            f"got u={result.u}"
+        )
+
+    def test_fuse_auto_mixed_dogmatic_routes_to_ccf(self):
+        """One dogmatic + one graded input under auto uses CCF, not WBF
+        dogmatic dominance."""
+        dogmatic = Opinion.dogmatic_true(0.5)
+        graded = Opinion(0.3, 0.3, 0.4, 0.5)
+        result = Opinion.fuse(dogmatic, graded, method="auto")
+        expected = Opinion.ccf(dogmatic, graded)
+        assert abs(result.b - expected.b) < 1e-9
+        assert abs(result.d - expected.d) < 1e-9
+        assert abs(result.u - expected.u) < 1e-9
 
     @pytest.mark.property
     @given(valid_opinions(min_uncertainty=0.05), valid_opinions(min_uncertainty=0.05))

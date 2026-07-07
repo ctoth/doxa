@@ -539,15 +539,22 @@ class Opinion:
         Parameters
         ----------
         method : str
-            "wbf" — always WBF (raises on dogmatic inputs)
+            "wbf" — always WBF (including Definition 4 Case 2 dogmatic
+            dominance)
             "ccf" — always CCF
-            "auto" — try WBF first; fall back to CCF on dogmatic inputs
+            "auto" — WBF for non-dogmatic inputs; CCF when any input is
+            dogmatic (or WBF is otherwise undefined), so disagreement
+            between dogmatic sources becomes uncertainty rather than
+            fractional belief with zero uncertainty (van der Heijden et
+            al. 2018, Definition 5)
         """
         if method == "wbf":
             return cls.wbf(*opinions)
         elif method == "ccf":
             return cls.ccf(*opinions)
         elif method == "auto":
+            if any(op.u < _TOL for op in opinions):
+                return cls.ccf(*opinions)
             try:
                 return cls.wbf(*opinions)
             except ValueError:
