@@ -95,6 +95,32 @@ class TestBaseRate:
         assert 0.0 < o.a < 1.0
 
 
+class TestFiniteCoordinates:
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    @pytest.mark.parametrize("coordinate", ["b", "d", "u", "a"])
+    def test_opinion_rejects_non_finite_coordinate(self, coordinate, value):
+        coordinates = {"b": 0.0, "d": 0.0, "u": 1.0, "a": 0.5}
+        coordinates[coordinate] = value
+
+        with pytest.raises(
+            ValueError,
+            match=rf"^{coordinate}=.* must be finite$",
+        ):
+            Opinion(**coordinates)
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+    @pytest.mark.parametrize("coordinate", ["r", "s", "a"])
+    def test_beta_evidence_rejects_non_finite_coordinate(self, coordinate, value):
+        coordinates = {"r": 0.0, "s": 0.0, "a": 0.5}
+        coordinates[coordinate] = value
+
+        with pytest.raises(
+            ValueError,
+            match=rf"^{coordinate}=.* must be finite$",
+        ):
+            BetaEvidence(**coordinates)
+
+
 # --- 3. E(ω) = b + a*u is in [0, 1] ---
 
 class TestExpectation:

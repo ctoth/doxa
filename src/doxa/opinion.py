@@ -26,6 +26,13 @@ _TOL = 1e-9
 _BASE_RATE_CLAMP = (0.01, 0.99)
 
 
+def _require_finite(**coordinates: float) -> None:
+    """Reject coordinates outside the finite real numbers."""
+    for name, value in coordinates.items():
+        if not math.isfinite(value):
+            raise ValueError(f"{name}={value} must be finite")
+
+
 def _clamp_base_rate(a: float) -> float:
     """Clamp a fused base rate to ``_BASE_RATE_CLAMP``."""
     lo, hi = _BASE_RATE_CLAMP
@@ -47,6 +54,7 @@ class Opinion:
     allow_dogmatic: bool = False
 
     def __post_init__(self) -> None:
+        _require_finite(b=self.b, d=self.d, u=self.u, a=self.a)
         for name, val in [("b", self.b), ("d", self.d), ("u", self.u)]:
             if val < -_TOL or val > 1.0 + _TOL:
                 raise ValueError(f"{name}={val} not in [0, 1]")
@@ -575,6 +583,7 @@ class BetaEvidence:
     a: float
 
     def __post_init__(self) -> None:
+        _require_finite(r=self.r, s=self.s, a=self.a)
         if self.r < 0:
             raise ValueError(f"r={self.r} must be >= 0")
         if self.s < 0:
