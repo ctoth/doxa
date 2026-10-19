@@ -462,14 +462,9 @@ class Opinion:
                 sum(op.a for op in opinions) / N,
             )
 
-        # Definition 4 Case 1. For each source, the belief/disbelief term is
-        # weighted by (1-u_i) times the product of every other uncertainty.
-        total_prod = math.prod(op.u for op in opinions)
-        prod_except = [total_prod / op.u for op in opinions]
-        weighted_terms = [
-            (1.0 - op.u) * prod_except[i]
-            for i, op in enumerate(opinions)
-        ]
+        # Definition 4 Case 1. Cancel the common product of uncertainties
+        # before normalization: its magnitude depends exponentially on N.
+        weighted_terms = [(1.0 - op.u) / op.u for op in opinions]
 
         num_b = sum(
             op.b * weighted_terms[i]
@@ -479,11 +474,11 @@ class Opinion:
             op.d * weighted_terms[i]
             for i, op in enumerate(opinions)
         )
-        num_u = sum(1.0 - op.u for op in opinions) * total_prod
+        num_u = sum(1.0 - op.u for op in opinions)
 
         kappa = sum(weighted_terms)
-        if abs(kappa) < _TOL:
-            raise ValueError("WBF denominator κ ≈ 0")
+        if kappa <= 0.0:
+            raise ValueError("WBF denominator must be positive")
 
         b_fused = num_b / kappa
         d_fused = num_d / kappa
@@ -669,41 +664,53 @@ def _ccf_binomial(opinions: list[Opinion]) -> Opinion:
     # Product of all uncertainties (pre-uncertainty mass).
     u_pre = math.prod(op.u for op in opinions)
 
-    # Term 1 of Eq. 7 (residue weighted by other actors' u) plus term
-    # 2 for x ∈ R(X) (joint commitment to the same singleton). For
-    # binomial singletons, terms 3 and 4 of Eq. 7 contribute zero
-    # when computing b^comp({x}) or b^comp({¬x}).
-    sum_b_res_weighted = sum(
-        res_b[i] * math.prod(opinions[j].u for j in range(N) if j != i)
-        for i in range(N)
+    # Each residual vector contains a zero at its consensus minimum, so
+    # prod(res_b) = prod(res_d) = 0. Keep the remaining positive compromise
+    # terms in log space until a common scale can be removed.
+    log_u = [math.log(op.u) if op.u > 0.0 else 0.0 for op in opinions]
+    zero_count = sum(op.u <= 0.0 for op in opinions)
+    log_u_product = math.fsum(log_u)
+    log_other_u = [
+        log_u_product - log_u[i]
+        if zero_count == 0
+        else log_u_product
+        if zero_count == 1 and op.u <= 0.0
+        else -math.inf
+        for i, op in enumerate(opinions)
+    ]
+    log_comp_b = [
+        math.log(residual) + log_other_u[i]
+        for i, residual in enumerate(res_b)
+        if residual > 0.0
+    ]
+    log_comp_d = [
+        math.log(residual) + log_other_u[i]
+        for i, residual in enumerate(res_d)
+        if residual > 0.0
+    ]
+    log_comp_X = sum(
+        math.log(b + d) if b + d > 0.0 else -math.inf
+        for b, d in zip(res_b, res_d)
     )
-    sum_d_res_weighted = sum(
-        res_d[i] * math.prod(opinions[j].u for j in range(N) if j != i)
-        for i in range(N)
-    )
-    comp_b = sum_b_res_weighted + math.prod(res_b)
-    comp_d = sum_d_res_weighted + math.prod(res_d)
-
-    # b^comp(X) — disagreement term. Inclusion-exclusion form of
-    # "all residual-mass tuples minus the all-{x} and all-{¬x} tuples."
-    prod_res_total = math.prod(res_b[i] + res_d[i] for i in range(N))
-    comp_X = prod_res_total - math.prod(res_b) - math.prod(res_d)
-
-    comp_sum = comp_b + comp_d + comp_X
+    scale = max((*log_comp_b, *log_comp_d, log_comp_X))
 
     # --- Step 3: Normalization ---
-    # When comp_sum ≈ 0 (no compromise mass to distribute), put any
+    # When every compromise term is zero, put any
     # residual missing mass directly into u. This handles self-fusion
     # and full-agreement edge cases that Def 5 Remark 4 doesn't cover.
-    if comp_sum < _TOL:
+    if scale == -math.inf:
         b_fused = cons_b
         d_fused = cons_d
         u_fused = max(0.0, 1.0 - cons_sum)
     else:
-        eta = (1.0 - cons_sum - u_pre) / comp_sum
-        u_fused = u_pre + eta * comp_X
-        b_fused = cons_b + eta * comp_b
-        d_fused = cons_d + eta * comp_d
+        comp_b = math.fsum(math.exp(term - scale) for term in log_comp_b)
+        comp_d = math.fsum(math.exp(term - scale) for term in log_comp_d)
+        comp_X = math.exp(log_comp_X - scale)
+        comp_sum = comp_b + comp_d + comp_X
+        remaining = 1.0 - cons_sum - u_pre
+        u_fused = u_pre + remaining * (comp_X / comp_sum)
+        b_fused = cons_b + remaining * (comp_b / comp_sum)
+        d_fused = cons_d + remaining * (comp_d / comp_sum)
 
     # Clamp tiny float drift from the constructor.
     b_fused = max(0.0, b_fused)
