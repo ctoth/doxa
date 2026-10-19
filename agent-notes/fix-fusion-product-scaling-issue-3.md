@@ -19,4 +19,4 @@ Command: `uv run --no-project --offline --python C:/Users/Q/code/doxa/.venv/Scri
 
 For the reported x=(.6,.3,.1), y=(.4,.3,.3) pools: at fourteen sources, CCF compromise mass is 3.0618e-10; at sixteen sources WBF denominator is 5.94864e-11. Both are positive representable values below 1e-9, so the original failure is a false zero test, not underflow. Actual product underflow is separately covered by the 400/600-source regressions.
 
-Next: commit, publish a draft PR, and read CI's full-suite/typing results. Base rates, dogmatic routing, and the true-zero fallback remain at their current owners.
+Published and fetched draft PR https://github.com/ctoth/doxa/pull/4 at source commit 1c26cd11bd32e15b8e1541f1ddfb564ad390bda0. CI run 39339779362 passed typing and full-suite tests on Python 3.11, 3.12, and 3.13. Base rates, dogmatic routing, and the true-zero fallback remain at their current owners. No merge or ready transition performed. This final note update records those results; verify the note-only final head before handoff.
